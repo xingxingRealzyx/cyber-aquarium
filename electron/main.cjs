@@ -4,6 +4,10 @@ const fs = require('node:fs');
 const { createUpdater, githubRequest } = require('./updates.cjs');
 const { stageAndLaunchInstaller, acknowledgeUpdateLaunch } = require('./update-installer.cjs');
 
+const windowsIcon = app.isPackaged
+  ? path.join(process.resourcesPath, 'aquarium.ico')
+  : path.join(__dirname, '..', 'assets', 'icons', 'aquarium.ico');
+
 app.setName('Cyber Aquarium');
 const userDataPath = app.commandLine.getSwitchValue('user-data-dir') || path.join(app.getPath('appData'), 'Cyber Aquarium');
 fs.mkdirSync(userDataPath, { recursive: true });
@@ -159,6 +163,7 @@ function revealAquarium(openSettings = false) {
 }
 
 function trayIcon() {
+  if (process.platform === 'win32') return windowsIcon;
   // A small fish silhouette rendered into a real bitmap, usable as a macOS template.
   const size = 36;
   const pixels = Buffer.alloc(size * size * 4);
@@ -169,12 +174,6 @@ function trayIcon() {
       const eye = (x - 26) ** 2 + (y - 16) ** 2 < 3;
       if ((body || tail) && !eye) {
         const offset = (y * size + x) * 4;
-        // The Windows notification area uses the bitmap colours directly (BGRA).
-        if (process.platform === 'win32') {
-          pixels[offset] = 156;
-          pixels[offset + 1] = 179;
-          pixels[offset + 2] = 47;
-        }
         pixels[offset + 3] = 255;
       }
     }
@@ -217,6 +216,7 @@ function createWindow() {
   aquariumWindow = new BrowserWindow({
     ...activeDisplay.workArea,
     title: '澄境 · Cyber Aquarium',
+    icon: process.platform === 'win32' ? windowsIcon : undefined,
     show: false,
     frame: false,
     acceptFirstMouse: true,

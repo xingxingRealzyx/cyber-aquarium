@@ -14,8 +14,10 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const release = path.join(root, 'release');
 const electronDir = path.join(root, 'node_modules', 'electron');
 const name = 'Cyber Aquarium';
+const icon = path.join(root, 'assets', 'icons', mac ? 'aquarium.icns' : 'aquarium.ico');
 
 await access(path.join(root, 'dist', 'index.html'));
+await access(icon);
 const electron = JSON.parse(await readFile(path.join(electronDir, 'package.json'), 'utf8'));
 const checksums = JSON.parse(await readFile(path.join(electronDir, 'checksums.json'), 'utf8'));
 const [output] = await packager({
@@ -23,6 +25,9 @@ const [output] = await packager({
   out: release,
   name,
   executableName: name,
+  icon,
+  // The Windows shell loads multi-resolution HICONs from an ordinary ICO file.
+  extraResource: mac ? [] : [icon],
   platform,
   arch,
   electronVersion: electron.version,
