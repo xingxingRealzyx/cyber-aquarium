@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { advanceBehavior } from '../src/behavior.js';
 import {
-  addAnimal, advanceSimulation, consumePellet, corpseDecay, createInitialState, feed,
-  fishLifeStage, removeAnimal, removeDead, restoreState, SPECIES,
+  addAnimal, advanceSimulation, animalLifeStage, consumePellet, corpseDecay, createInitialState, feed,
+  fishLifeStage, relativeAdultSize, removeAnimal, removeDead, restoreState, SPECIES,
 } from '../src/simulation.js';
 
 function emptyTank() {
@@ -16,6 +16,67 @@ function emptyTank() {
 function reload(tank) {
   return restoreState(JSON.stringify(tank));
 }
+
+test('stocked groups include breeding pairs and a selected sex persists in every species', () => {
+  const tank = createInitialState();
+  for (const species of ['neon', 'guppy', 'shrimp']) {
+    const sexes = new Set(tank.animals.filter(a => a.species === species).map(a => a.sex));
+    assert.deepEqual(sexes, new Set(['male', 'female']));
+  }
+  for (const species of Object.keys(SPECIES)) {
+    for (const sex of ['male', 'female']) {
+      const animal = addAnimal(tank, species, sex).animal;
+      assert.equal(animal.sex, sex);
+      assert.equal(animal.origin, 'stocked');
+      assert.deepEqual(reload(tank).animals.at(-1), animal);
+    }
+  }
+});
+
+test('legacy invertebrates remain full-sized adults with stable sexes after migration', () => {
+  const old = { version: 1, elapsedHours: 48, animals: ['shrimp', 'snail'].map(species => ({
+    id: `old-${species}`, species, ageHours: 10, size: 1.07, mass: .24,
+  })) };
+  const migrated = restoreState(old);
+  const sameSave = restoreState(old);
+  for (const [i, a] of migrated.animals.entries()) {
+    assert.equal(animalLifeStage(a), 'adult');
+    assert.equal(a.sex, sameSave.animals[i].sex);
+    assert.equal(a.size, 1.07);
+    assert.equal(a.mass, .24);
+    assert.equal(a.lifeAgeHours, SPECIES[a.species].maturityDays * 24 + 10);
+    assert.deepEqual(reload(migrated).animals[i], a);
+  }
+});
+
+test('all seven newborn body sizes survive reloading and grow gradually to reproductive maturity', () => {
+  for (const [species, spec] of Object.entries(SPECIES)) {
+    // A few minutes after birth. The state also supports children whose parents have since left.
+    const originalSize = .32;
+    const tank = restoreState({ version: 1, animals: [{
+      id: `young-${species}`, species, origin: 'born', motherId: 'mother', fatherId: 'father',
+      lifeAgeHours: 0, seed: .2, size: originalSize, mass: spec.mass * originalSize ** 3, hunger: 10,
+    }] });
+    tank.infectionClock.nextAtHours = Number.MAX_SAFE_INTEGER;
+    const young = tank.animals[0];
+    assert.equal(young.size, originalSize);
+    assert.equal(young.mass, spec.mass * originalSize ** 3);
+    assert.equal(animalLifeStage(young), 'juvenile');
+    advanceSimulation(tank, 1 / 12);
+    assert.ok(young.size > originalSize && young.size < originalSize * 1.04, `gradual first growth in ${species}`);
+    const growing = reload(tank).animals[0];
+    assert.deepEqual(growing, young);
+    const maturity = spec.maturityDays * 24;
+    advanceSimulation(tank, maturity / 2);
+    const halfway = young.size;
+    assert.ok(halfway > originalSize * 1.4);
+    assert.equal(animalLifeStage(young), 'juvenile');
+    advanceSimulation(tank, maturity / 2);
+    assert.ok(young.size > halfway && young.mass > growing.mass && relativeAdultSize(young) >= .7);
+    assert.equal(animalLifeStage(young), 'adult');
+    assert.deepEqual([young.motherId, young.fatherId], ['mother', 'father']);
+  }
+});
 
 test('stocked juveniles reach maturity within a play session, with distinct individual lifespans', () => {
   const tank = emptyTank();

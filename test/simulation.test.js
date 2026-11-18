@@ -99,6 +99,7 @@ test('a mature biofilter sustains the starter bioload with daily feeds and weekl
   const s = createInitialState();
   // Keep the same bioload for the two-week water-quality comparison.
   for (const animal of s.animals) {
+    animal.sex = 'female';
     if (animal.lifespanHours) animal.lifespanHours = 24 * 30;
   }
   s.infectionClock.nextAtHours = Number.MAX_SAFE_INTEGER;
@@ -188,7 +189,11 @@ test('invalid actions do not mutate the tank, capacities are bounded', () => {
   advanceSimulation(s, NaN); advanceSimulation(s, -2);
   assert.equal(s.elapsedHours, hours);
   for (let n = 0; n < 100; n++) addAnimal(s, 'neon');
-  assert.equal(s.animals.length, 80);
+  assert.equal(s.animals.length, 40);
+  assert.equal(addAnimal(s, 'neon').ok, false);
+  for (const a of s.animals) { a.alive = false; a.health = 0; }
+  for (let n = 0; n < 100; n++) addAnimal(s, 'neon');
+  assert.equal(s.animals.length, 80, 'retained bodies still need a physical slot');
   assert.equal(addAnimal(s, 'neon').ok, false);
 });
 

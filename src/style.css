@@ -72,3 +72,17 @@
 .case-card button { width: 100%; }
 .case-card button:disabled { color: #b5c5b7; background: #405346; cursor: default; }
 .resident-name small.case-summary { color: #e0b980; }
+.individual-name { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 5px; }
+.individual-name h2 { margin: 0; }
+.individual-sex { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 6px; background: #a9cda317; color: #afc7b1; font-size: 10px; }
+.individual-sex b { color: #e2efda; font-weight: 500; font-size: 12px; }
+.individual-facts .breeding-fact { grid-column: 1 / -1; }
+.breeding-fact dd { white-space: normal; line-height: 1.65; }
+.stock-options { display: flex; align-items: center; justify-content: space-between; margin: 15px 0 10px; font-size: 11px; color: #cad9c9; }
+.stock-options [role="group"] { display: flex; gap: 3px; padding: 3px; border: 1px solid #bad4b92d; border-radius: 8px; }
+.stock-options button { min-width: 35px; padding: 5px 8px; background: transparent; border-radius: 5px; color: #a2b6a7; font-size: 10px; }
+.stock-options button[aria-pressed="true"] { color: #213725; background: #c5d9b1; }
+.brood-row { padding: 8px 0; border-bottom: 1px solid #b2ceb41f; }
+.brood-row b, .brood-row small { display: block; }
+.brood-row b { color: #c5dab9; font-size: 11px; font-weight: 500; }
+.brood-row small { margin-top: 4px; color: #96af9d; font-size: 10px; }

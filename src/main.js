@@ -2,10 +2,12 @@ import './style.css';
 import { createAquarium } from './aquarium.js';
 import { advanceBehavior } from './behavior.js';
 import { sceneryPanel } from './scenery-panel.js';
+import { REPRODUCTION } from './reproduction.js';
 import {
   createInitialState, restoreState, advanceSimulation, addAnimal, addPlant, feed,
   changeWater, removeAnimal, removeDead, getAssessment, SPECIES,
-  addHardscape, removeHardscape, removePlant, fishLifeStage, corpseDecay, INFECTIONS, careForFish,
+  addHardscape, removeHardscape, removePlant, animalLifeStage, relativeAdultSize, availableAnimalSlots,
+  corpseDecay, INFECTIONS, careForFish,
 } from './simulation.js';
 
 const SAVE_KEY = 'chengjing.aquarium.v1';
@@ -43,6 +45,7 @@ try {
 }
 let panelOpen = false, activeTab = 'water', selectedId = null, autoRotate = false;
 let expandedKind = null, updateState = { phase: 'idle' }, lastPanelHTML = '';
+let stockingSex = 'random';
 let pinned = false, compact = false, stats = { fps: 0 }, renderer;
 let desktopLayout=null, sentPointerInside=null;
 let verifyUpdateFrame=false;
@@ -69,7 +72,10 @@ app.innerHTML = `
     <button class="icon-btn" data-action="deselect" aria-label="关闭生物信息">${icon('close')}</button>
     <header>
       <span class="eyebrow">INDIVIDUAL LIFE · 个体档案</span>
-      <div class="individual-heading"><h2></h2><small></small></div>
+      <div class="individual-heading">
+        <div class="individual-name"><h2></h2><span class="individual-sex">性别 <b data-field="sex"></b></span></div>
+        <small></small>
+      </div>
     </header>
     <section class="case-card" aria-label="感染护理" hidden>
       <div class="case-heading"><strong data-field="infection"></strong><span data-field="case-status"></span></div>
@@ -114,7 +120,15 @@ function metric(name, value, unit, note, valueRatio, severity = '') {
 function animalLabel(a) {
   return a.label || `${SPECIES[a.species]?.name || '水下居民'} · ${a.id.slice(-4)}`;
 }
-const stageNames = { juvenile: '幼鱼', adult: '成鱼', senior: '老年鱼' };
+function stageLabel(a) {
+  const stage = animalLifeStage(a);
+  if (stage === 'senior') return '老年鱼';
+  const kind = a.species === 'shrimp' ? '虾' : a.species === 'snail' ? '螺' : '鱼';
+  return (stage === 'juvenile' ? '幼' : '成') + kind;
+}
+function sexLabel(a) {
+  return a.sex === 'male' ? '公' : '母';
+}
 function behaviorLabel(a) {
   if(!a.alive) return '已死亡 · 待捞起';
   if(state.paused) return '已暂停';
@@ -125,6 +139,28 @@ function durationLabel(hours) {
   if(hours<1) return `${Math.floor(hours*60)} 分钟`;
   if(hours<24) return `${hours.toFixed(1)} 小时`;
   return `${Math.floor(hours/24)} 天 ${Math.floor(hours%24)} 小时`;
+}
+function broodTiming(brood) {
+  const action = REPRODUCTION[brood.species].kind === 'livebearer' ? '出生' : '孵化';
+  return `预计 ${durationLabel(Math.max(0, brood.dueAtHours - state.elapsedHours))}后${action}（缸内时间）`;
+}
+function breedingSummary(a) {
+  const brood = state.broods.find(b => b.motherId === a.id || b.fatherId === a.id);
+  if (brood) {
+    const role = brood.motherId === a.id ? '本窝母亲' : '本窝父亲';
+    return `${REPRODUCTION[a.species].label}（${role}） · ${broodTiming(brood)}`;
+  }
+  if (animalLifeStage(a) === 'juvenile') return '成年后可与同种异性配对';
+  if (animalLifeStage(a) === 'senior') return '已过繁殖期';
+  const mate = state.animals.some(b => b.alive && b.species === a.species && b.sex !== a.sex && animalLifeStage(b) === 'adult');
+  const kind = a.species === 'shrimp' ? '虾' : a.species === 'snail' ? '螺' : '鱼';
+  return mate ? '已有同种异性成体，条件合适时会自行配对' : `缸中还缺一只同种成年${a.sex === 'female' ? '公' : '母'}${kind}`;
+}
+function broodPanel() {
+  if (!state.broods.length) return '';
+  return `<section class="brood-panel" aria-label="繁殖进度"><div class="section-label"><span>繁殖进度</span><span>${state.broods.length} 窝</span></div>
+    ${state.broods.map(b => `<div class="brood-row"><b>${SPECIES[b.species].name} · ${REPRODUCTION[b.species].label}</b>
+      <small>${broodTiming(b)}</small></div>`).join('')}</section>`;
 }
 function waterPanel() {
   const w=state.water, a=getAssessment(state), living=state.animals.filter(x=>x.alive).length;
@@ -157,17 +193,18 @@ function residentRow(a) {
     : `<span class="warning">已分解 ${Math.round(corpseDecay(a)*100)}%</span>`;
   return `<button class="resident ${a.id===selectedId?'selected':''}" data-select="${escape(a.id)}">
     <span class="resident-dot ${a.species} ${!a.alive?'dead':''}"></span>
-    <span class="resident-name">${escape(animalLabel(a))}<small class="${infection?'case-summary':''}">${summary}</small></span>
+    <span class="resident-name">${escape(animalLabel(a))}<small class="${infection?'case-summary':''}">${sexLabel(a)} · ${stageLabel(a)} · ${summary}</small></span>
     <span class="resident-vitals">${status}</span></button>`;
 }
 function lifePanel() {
   const alive=state.animals.filter(x=>x.alive), dead=state.animals.filter(x=>!x.alive);
+  const freeSlots = availableAnimalSlots(state);
   const patients = alive.filter(a => a.infection);
   const ordered = patients.length ? [...patients, ...state.animals.filter(a => !a.alive || !a.infection)] : state.animals;
   const residents = `<div class="section-label"><span>个体状态</span><span>${patients.length ? `${patients.length} 条鱼感染 · 点选护理` : '点击鱼也可查看'}</span></div>
     <div class="residents">${ordered.map(residentRow).join('')}</div>`;
   const speciesCards = Object.entries(SPECIES).map(([key, species]) => `
-    <button class="species-card" data-add-animal="${key}" aria-label="放入${escape(species.name)}" ${alive.length >= 40 ? 'disabled' : ''}>
+    <button class="species-card" data-add-animal="${key}" aria-label="放入${escape(species.name)}" ${freeSlots <= 0 ? 'disabled' : ''}>
       <img class="species-portrait" src="./species/${key}.png" width="420" height="192" alt="" draggable="false" />
       <span class="species-caption"><b>${escape(species.name)}</b><span aria-hidden="true">＋</span></span>
       <small lang="la">${escape(species.latin)}</small>
@@ -175,6 +212,11 @@ function lifePanel() {
   return `<div class="section-label"><span>水下居民</span><span>${alive.length} 存活${dead.length?` · ${dead.length} 死亡`:''}</span></div>
     ${dead.length?`<button class="danger-btn" data-action="remove-dead">捞起全部遗体（${dead.length}）</button><p class="micro-note">也可点选一只遗体单独捞起。</p>`:''}
     ${patients.length ? residents : ''}
+    ${broodPanel()}
+    <div class="stock-options"><span>入缸性别</span><div role="group" aria-label="新加入生物的性别">
+      ${[['random','随机'],['male','公'],['female','母']].map(([value,label]) => `<button data-stock-sex="${value}" aria-pressed="${stockingSex === value}">${label}</button>`).join('')}
+    </div></div>
+    ${freeSlots ? '' : '<p class="micro-note">缸中已无空位，孕育中的幼体也会预留位置。</p>'}
     <div class="species-grid">${speciesCards}</div>
     <button class="wide-btn" data-action="scenery">${icon('leaf')} 管理水草与造景</button>
     ${patients.length ? '' : residents}`;
@@ -221,7 +263,7 @@ function settingsPanel() {
     <div class="desktop-actions"><button class="secondary-btn ${pinned?'selected':''}" data-action="pin">${icon('pin')}${pinned?'已置顶':'置顶显示'}</button><button class="secondary-btn" data-action="compact">${icon('expand')}${compact?'标准大小':'小巧模式'}</button></div>
     <button class="wide-btn" data-action="reset-view">${icon('rotate')} 重置观察角度</button>
     ${desktop?`<button class="wide-btn" data-action="click-through">穿透鼠标 · 在${trayLocation}鱼图标中恢复</button>`:''}
-    <details class="model-note"><summary>关于这只鱼缸</summary><p>鱼缸由 GPU 实时渲染。水质遵循简化的氮循环、溶氧和温度模型；毒性随 pH 和温度变化，健康会累积损伤，鱼也会因缺氧、毒性与饥饿死亡。</p><p>每只生物都有独立状态；饲料需要实际接触才能被吃到。游动节奏保持自然，生态时间可独立加速。</p><p>这是生态模拟原型，参数经过玩法标定，并非真实养鱼的水质预测工具。鱼可能随机遭遇病毒或细菌感染，可在个体档案中护理。当前不模拟繁殖与品种间攻击。进度仅保存在此设备。</p><p>所有含氮读数统一以氮计，mg N/L。开关灯为手动，默认成熟滤菌缸。</p></details>`;
+    <details class="model-note"><summary>关于这只鱼缸</summary><p>鱼缸由 GPU 实时渲染。水质遵循简化的氮循环、溶氧和温度模型；毒性随 pH 和温度变化，健康会累积损伤，鱼也会因缺氧、毒性与饥饿死亡。</p><p>每只生物都有独立状态；饲料需要实际接触才能被吃到。游动节奏保持自然，生态时间可独立加速。</p><p>这是生态模拟原型，参数经过玩法标定。鱼可能随机遭遇病毒或细菌感染，可在个体档案中护理。鱼、虾、螺会与同种异性成体繁殖；为便于在淡水缸体验，斑马螺卵囊在游戏中可直接孵出小螺。进度仅保存在此设备。</p><p>所有含氮读数统一以氮计，mg N/L。开关灯为手动，默认成熟滤菌缸。</p></details>`;
 }
 const panelViews = {
   water: waterPanel,
@@ -290,14 +332,25 @@ function updateInspector() {
     inspector.scrollTop = 0;
     inspector.querySelector('.individual-heading h2').textContent = animalLabel(a);
     inspector.querySelector('.individual-heading small').textContent = SPECIES[a.species].latin;
+    inspector.querySelector('[data-field="sex"]').textContent = sexLabel(a);
   }
   inspector.dataset.animalId=a.id;
   inspector.querySelector('.individual-feed').hidden=!a.alive;
   inspector.querySelector('[data-action="remove-animal"]').textContent = a.alive ? '移出鱼缸' : '捞起遗体';
-  const stage = fishLifeStage(a);
-  const ageFacts = stage ? `
-    <div><dt>${a.alive?'鱼龄':'死亡时鱼龄'}</dt><dd data-field="fish-age">${durationLabel(a.lifeAgeHours)}</dd></div>
-    <div><dt>生命阶段</dt><dd data-field="life-stage">${stageNames[stage]}</dd></div>` : '';
+  const ageLabel = a.species === 'shrimp' ? '虾龄' : a.species === 'snail' ? '螺龄' : '鱼龄';
+  const adultPercent = Math.round(relativeAdultSize(a) * 100);
+  const ageFacts = `
+    <div><dt>${a.alive ? '' : '死亡时'}${ageLabel}</dt><dd data-field="fish-age">${durationLabel(a.lifeAgeHours)}</dd></div>
+    <div><dt>生命阶段</dt><dd data-field="life-stage">${stageLabel(a)}</dd></div>
+    <div><dt>相对成年体长</dt><dd data-field="body-size">${adultPercent}%</dd></div>`;
+  const parentName = id => {
+    const parent = state.animals.find(p => p.id === id);
+    return parent ? escape(animalLabel(parent)) : '已离缸';
+  };
+  const originFacts = a.origin === 'born' ? `
+    <div><dt>出生地</dt><dd data-field="origin">本缸出生</dd></div>
+    <div><dt>母亲</dt><dd>${parentName(a.motherId)}</dd></div>
+    <div><dt>父亲</dt><dd>${parentName(a.fatherId)}</dd></div>` : '';
   const patient = a.alive && a.infection;
   const card = inspector.querySelector('.case-card');
   card.hidden = !patient;
@@ -323,6 +376,7 @@ function updateInspector() {
         <div><dt>死因</dt><dd>${escape(a.causeOfDeath||'未知')}</dd></div>
         <div><dt>死亡已过</dt><dd>${durationLabel(Math.max(0,state.elapsedHours-a.deathHours))}</dd></div>
         ${ageFacts}
+        ${originFacts}
       </dl>
       <p class="individual-note">遗体分解会消耗溶氧并释放氨。捞起后，已经进入水中的污染物仍需过滤或换水处理。</p>`;
     return;
@@ -338,7 +392,9 @@ function updateInspector() {
     </section>
     <dl class="individual-facts">
       ${ageFacts}
-      <div><dt>体重</dt><dd data-field="mass">${(a.mass||SPECIES[a.species].mass).toFixed(2)} g</dd></div>
+      <div><dt>体重</dt><dd data-field="mass">${a.mass < .1 ? (a.mass * 1000).toFixed(1) + ' mg' : a.mass.toFixed(2) + ' g'}</dd></div>
+      ${originFacts}
+      <div class="breeding-fact"><dt>繁殖状态</dt><dd data-field="breeding">${breedingSummary(a)}</dd></div>
       <div><dt>入缸时长</dt><dd>${durationLabel(a.ageHours)}</dd></div>
       <div><dt>上次进食</dt><dd data-field="last-meal">${lastMeal}</dd></div>
       <div><dt>累计摄食</dt><dd data-field="eaten">${((a.totalEatenGrams||0)*1000).toFixed(1)} mg · ${a.bites||0} 口</dd></div>
@@ -384,7 +440,11 @@ app.addEventListener('click', e=>{
   if(b.dataset.action) perform(b.dataset.action);
   else if(b.dataset.tab) openPanel(b.dataset.tab);
   else if(b.dataset.equipment) { const key=b.dataset.equipment; state.equipment[key]=!state.equipment[key]; updatePanel(); persist(); }
-  else if(b.dataset.addAnimal) { if(state.animals.filter(a=>a.alive).length>=40) return; const result=addAnimal(state,b.dataset.addAnimal); notify(result.message); updatePanel(); persist(); }
+  else if(b.dataset.stockSex) { stockingSex=b.dataset.stockSex; updatePanel(); }
+  else if(b.dataset.addAnimal) {
+    const result = addAnimal(state, b.dataset.addAnimal, stockingSex === 'random' ? undefined : stockingSex);
+    notify(result.message); updatePanel(); persist();
+  }
   else if(b.dataset.showKind) { expandedKind = expandedKind === b.dataset.showKind ? null : b.dataset.showKind; updatePanel(); }
   else if(b.dataset.addPlant || b.dataset.removePlant || b.dataset.addHardscape || b.dataset.removeHardscape) {
     const {addPlant: plant, removePlant: plantId, addHardscape: kind, removeHardscape: itemId} = b.dataset;
@@ -543,4 +603,4 @@ try {
 setTimeout(()=>$('#hint').classList.add('dismissed'),7500);
 if(saveError)notify('旧存档无法读取，已建立一只新鱼缸');
 // Read-only diagnostic snapshot is useful when verifying the native GPU renderer.
-Object.defineProperty(window,'aquariumDiagnostics',{get:()=>({state:JSON.parse(JSON.stringify(state)),stats:{...stats},renderer:renderer?.renderer.info.render,panelOpen,selectedId,screenAnimals:renderer?.getAnimalScreenPositions?.()||[]})});
+Object.defineProperty(window,'aquariumDiagnostics',{get:()=>({state:JSON.parse(JSON.stringify(state)),stats:{...stats},renderer:renderer?.renderer.info.render,panelOpen,selectedId,screenAnimals:renderer?.getAnimalScreenPositions?.()||[],screenBroods:renderer?.getBroodScreenPositions?.()||[]})});

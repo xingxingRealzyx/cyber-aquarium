@@ -9,6 +9,7 @@ import { createFishModel as fishModel, animateFish } from './fish-model.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createAquaticPlants } from './aquatic-plants.js';
+import { createBroodDisplay } from './brood-model.js';
 
 // All geometry is local. The framebuffer remains transparent outside the tank.
 const WIDTH = 8, HEIGHT = 4.4, DEPTH = 4, WATER_LEVEL = 4.14;
@@ -199,6 +200,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
 
   const animals=new Map();
   const fauna=new THREE.Group();tank.add(fauna);
+  const broodDisplay = createBroodDisplay(tank, hardscape.group);
   const particleCount=170;
   const particlePositions=new Float32Array(particleCount*3);
   const particleGeo=new THREE.BufferGeometry();particleGeo.setAttribute('position',new THREE.BufferAttribute(particlePositions,3));
@@ -244,35 +246,57 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     camera.updateMatrixWorld();raycaster.setFromCamera(pointer,camera);
   }
   function hitTest(clientX,clientY){setRay(clientX,clientY);return raycaster.ray.intersectsBox(tankBounds)||raycaster.ray.intersectsBox(baseBounds);}
+  function screenPoint(point, rect) {
+    point.project(camera);
+    return {
+      x: rect.left + (point.x + 1) * rect.width / 2, y: rect.top + (1 - point.y) * rect.height / 2,
+      visible: Math.abs(point.z) <= 1 && Math.abs(point.x) <= 1 && Math.abs(point.y) <= 1,
+    };
+  }
   function getAnimalScreenPositions(){
-    const r=renderer.domElement.getBoundingClientRect();
-    camera.updateMatrixWorld();fauna.updateMatrixWorld(true);
+    const rect=renderer.domElement.getBoundingClientRect();
+    camera.updateMatrixWorld();
     return [...animals.entries()].map(([id,model])=>{
-      model.getWorldPosition(projected);projected.project(camera);
-      return {id,x:r.left+(projected.x+1)*r.width/2,y:r.top+(1-projected.y)*r.height/2,
-        visible:projected.z>=-1&&projected.z<=1&&Math.abs(projected.x)<=1&&Math.abs(projected.y)<=1};
+      // Bottom dwellers have their local origin at their feet.
+      const y = model.userData.kind === 'snail' ? .15 : model.userData.kind === 'shrimp' ? .09 : 0;
+      model.localToWorld(projected.set(0, y, 0));
+      return { id, scale: model.scale.x, ...screenPoint(projected, rect) };
     });
   }
-  function pickAnimal(clientX,clientY){
+  function getBroodScreenPositions(){
+    const rect=renderer.domElement.getBoundingClientRect();
+    camera.updateMatrixWorld();
+    return [...broodDisplay.clutches].filter(([,mesh])=>mesh.visible).map(([id,mesh])=>{
+      mesh.getMatrixAt(0, dummy.matrix);
+      mesh.localToWorld(projected.setFromMatrixPosition(dummy.matrix));
+      return { id, count: mesh.count, ...screenPoint(projected, rect) };
+    });
+  }
+  function pickAnimal(clientX,clientY,cycleFrom=null){
     setRay(clientX,clientY);fauna.updateMatrixWorld(true);
     const hits=raycaster.intersectObjects([...animals.values()],true);
+    const candidates = new Set();
     for(const hit of hits){
       let object=hit.object;
       if(object.userData.pickIgnore)continue;
       while(object&&!object.userData.animalId)object=object.parent;
-      if(object)return object.userData.animalId;
+      if(object){
+        if (!cycleFrom) return object.userData.animalId;
+        candidates.add(object.userData.animalId);
+      }
     }
-    // Small fish remain clickable without requiring a one-pixel hit on a fin.
-    let closest=null,closestDistance=18;
-    for(const point of getAnimalScreenPositions()){
-      if(!point.visible)continue;
-      const distance=Math.hypot(point.x-clientX,point.y-clientY);
-      if(distance<closestDistance){closest=point.id;closestDistance=distance;}
-    }
-    return closest;
+    // Tiny fry remain selectable near their center. Consecutive clicks on
+    // a cluster cycle through overlapping parents and offspring.
+    const radius = candidates.size ? 8 : 18;
+    const nearby = getAnimalScreenPositions().filter(p => p.visible)
+      .map(p => ({ id: p.id, distance: Math.hypot(p.x-clientX, p.y-clientY) }))
+      .filter(p => p.distance < radius).sort((a,b) => a.distance - b.distance);
+    for (const { id } of nearby) candidates.add(id);
+    const ids = [...candidates];
+    return ids.length ? ids[(ids.indexOf(cycleFrom) + 1) % ids.length] : null;
   }
   function setSelectedAnimal(id){selectedAnimalId=id??null;}
-  let pointerDown=null;
+  let pointerDown=null, lastPick=null;
   const onPointerDown=(event)=>{
     pointerDown=event.button===0?{x:event.clientX,y:event.clientY,id:event.pointerId,dragged:false}:null;
   };
@@ -283,7 +307,10 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   const onPointerUp=(event)=>{
     const down=pointerDown;pointerDown=null;
     if(event.button!==0||!down||down.id!==event.pointerId||down.dragged||Math.hypot(event.clientX-down.x,event.clientY-down.y)>5)return;
-    const id=pickAnimal(event.clientX,event.clientY);
+    const cycle = lastPick && event.timeStamp-lastPick.time < 1100 &&
+      Math.hypot(event.clientX-lastPick.x,event.clientY-lastPick.y) < 4;
+    const id=pickAnimal(event.clientX,event.clientY,cycle ? lastPick.id : null);
+    lastPick={x:event.clientX,y:event.clientY,time:event.timeStamp,id};
     if(id){setSelectedAnimal(id);onSelect(id);}
   };
   const onPointerCancel=()=>{pointerDown=null;renderer.domElement.style.cursor='grab';};
@@ -336,7 +363,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
       const velocity=animal.velocity||{x:0,y:0,z:0};
       const fish = model.userData.kind === 'fish';
       const decay = !alive && fish ? corpseDecay(animal) : 0;
-      const size = clamp(animal.size ?? 1, .6, 1.5);
+      const size = animal.size ?? 1;
       model.scale.set(size, size * (1 - .13 * decay), size * (1 - .28 * decay));
       // State owns all locomotion and feeding; rendering never consumes food.
       if(hasPosition) model.position.set(p.x,p.y,p.z);
@@ -370,6 +397,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
       if (fish) animateFish(model,animal,state.paused ? 0 : deltaSeconds,swimSpeed,decay);
     }
     for(const [id,model] of animals)if(!currentIds.has(id)){fauna.remove(model);disposeObject(model);animals.delete(id);}
+    broodDisplay.update(state.broods ?? [], animals, plantsGroup?.userData.leafSites, t);
     for(let i=0;i<particleCount;i++){
       particlePositions[i*3]=(random(i+31)-.5)*7.7+Math.sin(t*.1+i)*.025;
       particlePositions[i*3+1]=.5+fract(random(i+64)+t*.007)*3.55;
@@ -424,7 +452,8 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     renderer.domElement.removeEventListener('pointerup',onPointerUp);
     renderer.domElement.removeEventListener('pointercancel',onPointerCancel);
     renderer.domElement.removeEventListener('pointerleave',onPointerLeave);
+    broodDisplay.dispose();
     disposeObject(scene);waterLight.dispose();keyLight.shadow.dispose();environment.dispose();renderer.dispose();renderer.domElement.remove();
   }
-  return {update,resize,resetView,setDesktopLayout:desktopView.setLayout,setAutoRotate:(value)=>{controls.autoRotate=Boolean(value);},setQuality,dispose,renderer,camera,controls,hitTest,setSelectedAnimal,getAnimalScreenPositions};
+  return {update,resize,resetView,setDesktopLayout:desktopView.setLayout,setAutoRotate:(value)=>{controls.autoRotate=Boolean(value);},setQuality,dispose,renderer,camera,controls,hitTest,setSelectedAnimal,getAnimalScreenPositions,getBroodScreenPositions};
 }

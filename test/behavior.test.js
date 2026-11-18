@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createInitialState, restoreState, feed, consumePellet, changeWater, advanceSimulation, MAX_FOOD_PELLETS, substrateHeight } from '../src/simulation.js';
+import { addAnimal, createInitialState, restoreState, feed, consumePellet, changeWater, advanceSimulation, MAX_FOOD_PELLETS, substrateHeight } from '../src/simulation.js';
 import { advanceBehavior } from '../src/behavior.js';
 
 const sumFood = state => state.foodPellets.reduce((sum,p)=>sum+p.mass,0);
@@ -15,6 +15,29 @@ function fixture(){
   }
   return state;
 }
+
+test('both angelfish parents guard the eggs but can leave to feed or breathe', () => {
+  const tank = createInitialState();
+  tank.animals = [];
+  const mother = addAnimal(tank, 'angelfish', 'female').animal;
+  const father = addAnimal(tank, 'angelfish', 'male').animal;
+  const nest = { x: 2.4, y: 1.2, z: 1.4 };
+  tank.broods = [{ species: 'angelfish', motherId: mother.id, fatherId: father.id, position: nest }];
+  for (const a of tank.animals) a.position = { x: -2, y: 3, z: -.6 };
+  advanceBehavior(tank, 30);
+  for (const a of tank.animals) {
+    assert.ok(Math.hypot(a.position.x - nest.x, a.position.y - nest.y, a.position.z - nest.z) < .8);
+  }
+  feed(tank);
+  advanceBehavior(tank, .1);
+  assert.equal(mother.behavior, 'seeking');
+  const depth = mother.position.y;
+  tank.water.oxygen = 2;
+  advanceBehavior(tank, 5);
+  assert.equal(mother.behavior, 'gasping');
+  assert.equal(mother.targetFoodId, null);
+  assert.ok(mother.position.y > depth + .5);
+});
 
 test('each animal has stable individual traits, labels and spatial state',()=>{
   const state=createInitialState();

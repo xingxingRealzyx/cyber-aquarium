@@ -1,6 +1,8 @@
 import { INFECTIONS, createInfectionClock, restoreInfectionClock, restoreInfection, startScheduledInfection, advanceInfection } from './fish-health.js';
+import { advanceReproduction, availableAnimalSlots, MAX_ANIMALS, removeAttachedBroods, restoreBroods } from './reproduction.js';
 
 export { INFECTIONS };
+export { availableAnimalSlots };
 
 /** Freshwater ecosystem model. Nitrogen concentrations are mg N/L, time is hours. */
 export const SPECIES = Object.freeze({
@@ -21,8 +23,8 @@ export const SPECIES = Object.freeze({
     mass: 0.58, temperature: [23, 28], ph: [6, 7.5], sensitivity: 1.05,
     swim: { cruiseSpeed: 0.58, cruisingHeight: 1.90, pace: 1.08 },
   },
-  shrimp: { name: '樱花虾', latin: 'Neocaridina davidi', mass: 0.15, temperature: [20, 27], ph: [6.5, 8], sensitivity: 1.25, type: 'invertebrate' },
-  snail: { name: '斑马螺', latin: 'Vittina natalensis', mass: 0.4, temperature: [22, 28], ph: [6.8, 8.2], sensitivity: 0.75, type: 'invertebrate' },
+  shrimp: { maturityDays: 1, name: '樱花虾', latin: 'Neocaridina davidi', mass: 0.15, temperature: [20, 27], ph: [6.5, 8], sensitivity: 1.25, type: 'invertebrate' },
+  snail: { maturityDays: 1.5, name: '斑马螺', latin: 'Vittina natalensis', mass: 0.4, temperature: [22, 28], ph: [6.8, 8.2], sensitivity: 0.75, type: 'invertebrate' },
 });
 
 export const PLANTS = Object.freeze({
@@ -36,7 +38,6 @@ export const HARDSCAPE = Object.freeze({
   wood: { name: '沉木', starterCount: 5 },
 });
 
-const MAX_ANIMALS = 80;
 export const MAX_PLANTS = 40;
 export const MAX_HARDSCAPE = 40;
 export const MAX_BED_PELLETS = 160;
@@ -61,23 +62,31 @@ const random = seed => { const n = Math.sin(seed * 127.1 + 311.7) * 43758.5453; 
 const seedFromId = value => { let hash = 2166136261; for (const char of String(value)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619); return (hash >>> 0) / 4294967296; };
 export const substrateHeight = (x,z) => 0.24 + 0.17 * (z + 2) / 4 + 0.18 * Math.exp(-((x + 2.3) ** 2 + (z - 0.3) ** 2) / 2.5) + 0.045 * Math.sin(x * 1.7 + z);
 
-function animal(species, serial = 1, seed = Math.random()) {
+function adultSize(species, seed) {
+  const variation = random(seed + 21);
+  return SPECIES[species].type === 'fish' ? 1.05 + variation * .2 : .85 + variation * .35;
+}
+
+function animal(species, serial = 1, seed = Math.random(), brood = null) {
   const x = (random(seed + 31) - .5) * 5.5, z = (random(seed + 32) - .5) * 2.2;
   const spec = SPECIES[species];
   const fish = spec.type === 'fish';
-  const ageAtStocking = fish ? spec.maturityDays * 24 * (.25 + .2 * random(seed + 24)) : 0;
-  const size = fish
-    ? adultSize(seed) * (.58 + .34 * ageAtStocking / (spec.maturityDays * 24))
-    : .85 + random(seed + 21) * .35;
-  const mass = spec.mass * size ** (fish ? 3 : 2);
+  const maturity = spec.maturityDays * 24;
+  const stockedAge = fish ? maturity * (.25 + .2 * random(seed + 24)) : maturity;
+  const stockedFraction = fish ? .58 + .34 * stockedAge / maturity : 1;
+  const size = adultSize(species, seed) * (brood ? .30 + .06 * random(seed + 25) : stockedFraction);
+  const mass = spec.mass * size ** (fish || brood ? 3 : 2);
   return {
-    id: key('animal'), species, serial, label: `${SPECIES[species].name} #${String(serial).padStart(2,'0')}`,
+    id: brood ? `animal-born-${serial}-${Math.floor(seed * 2 ** 32).toString(36)}` : key('animal'),
+    species, serial, label: `${spec.name} #${String(serial).padStart(2,'0')}`,
+    sex: random(seed + 26) < .5 ? 'male' : 'female', origin: brood ? 'born' : 'stocked',
+    motherId: brood?.motherId ?? null, fatherId: brood?.fatherId ?? null, nextBreedHours: 0,
+    lifeAgeHours: brood ? 0 : stockedAge,
     health: 100, hunger: 12 + random(seed + 9) * 30, alive: true,
     ageHours: 0, deathHours: null, seed, corpseMass: 0, stress: 0, causeOfDeath: null,
     size, mass, metabolism: .85 + random(seed + 22) * .3,
     ...(fish && {
       infection: null,
-      lifeAgeHours: ageAtStocking,
       lifespanHours: spec.lifespanDays * 24 * (.85 + .3 * random(seed + 23)),
     }),
     position: { x, y: fish ? 1.5 + random(seed + 33) * 1.4 : substrateHeight(x,z) + .025, z },
@@ -87,34 +96,46 @@ function animal(species, serial = 1, seed = Math.random()) {
   };
 }
 
-function adultSize(seed) {
-  return 1.05 + random(seed + 21) * .2;
+function spawnOffspring(state, brood, index) {
+  const seed = seedFromId(`${brood.motherId}/${brood.fatherId}/${brood.id}/${index}`);
+  const young = animal(brood.species, state.nextAnimalNumber++, seed, brood);
+  const x = clamp(brood.position.x + (random(seed + 32) - .5) * .32, -3.65, 3.65);
+  const z = clamp(brood.position.z + (random(seed + 33) - .5) * .24, -1.65, 1.65);
+  const floor = substrateHeight(x, z);
+  const fish = SPECIES[brood.species].type === 'fish';
+  young.position = { x, y: fish ? clamp(brood.position.y, Math.max(.67, floor + .17), 3.96) : floor + .025, z };
+  state.animals.push(young);
+  return young;
+}
+
+export function relativeAdultSize(a) {
+  return clamp(a.size / adultSize(a.species, a.seed), 0, 1);
+}
+
+export function animalLifeStage(a) {
+  const spec = SPECIES[a.species];
+  if (a.lifeAgeHours < spec.maturityDays * 24 || (a.origin === 'born' && relativeAdultSize(a) < .7)) return 'juvenile';
+  return spec.type === 'fish' && a.lifeAgeHours >= a.lifespanHours * .8 ? 'senior' : 'adult';
 }
 
 export function fishLifeStage(a) {
-  const spec = SPECIES[a.species];
-  if (spec.type !== 'fish') return null;
-  if (a.lifeAgeHours < spec.maturityDays * 24) return 'juvenile';
-  return a.lifeAgeHours < a.lifespanHours * .8 ? 'adult' : 'senior';
+  return SPECIES[a.species].type === 'fish' ? animalLifeStage(a) : null;
 }
 
 export function corpseDecay(a) {
   return a.alive ? 0 : clamp(1 - a.corpseMass / a.mass, 0, 1);
 }
 
-function growFish(a, spec, dt) {
+function growAnimal(a, spec, dt) {
   a.lifeAgeHours += dt;
-  if (a.lifeAgeHours >= .8 * a.lifespanHours) return;
-  const targetSize = adultSize(a.seed);
+  if (spec.type === 'fish' && a.lifeAgeHours >= .8 * a.lifespanHours) return;
+  const targetSize = adultSize(a.species, a.seed);
   if (a.size >= targetSize) return;
   const condition = clamp((80 - a.hunger) / 50, 0, 1) * clamp((a.health - 35) / 55, 0, 1);
-  const remainingMass = Math.max(0, spec.mass * targetSize ** 3 - a.mass);
-  // Stored satiety, replenished by actual bites, supports growth on the game clock.
-  const growth = Math.min(remainingMass * decayFraction(3 * condition / (spec.maturityDays * 24), dt),
-    a.mass * ((targetSize / a.size) ** 3 - 1));
-  // Scale visible length consistently with the individual fish's change in wet mass.
-  a.size *= Math.cbrt(1 + growth / a.mass);
-  a.mass += growth;
+  // Grow in length first, so a tiny hatchling cannot gain most of its size in one meal.
+  const size = a.size + (targetSize - a.size) * decayFraction(2.5 * condition / (spec.maturityDays * 24), dt);
+  a.mass *= (size / a.size) ** 3;
+  a.size = size;
 }
 
 export function reconcileFood(state) {
@@ -239,19 +260,30 @@ export function createInitialState() {
     hardscape: Object.entries(HARDSCAPE).flatMap(([kind, { starterCount }]) =>
       Array.from({ length: starterCount }, (_, slot) => ({ id: key('scenery'), kind, slot }))),
     bacteria: { ammonia: 1, nitrite: 1 }, food: 0, foodPellets: [], detritus: 0.01,
-    nextAnimalNumber: 13, behaviorSeconds: 0,
+    nextAnimalNumber: 13, behaviorSeconds: 0, broods: [],
     alkalinity: 4, events: [], history: [], lastFedHours: null, lastWaterChangeHours: 0,
     lastAssessmentLevel: 'good', lastHistoryHour: -1,
   };
+  // A newcomer can watch a first brood without having to replace a same-sex starter group.
+  for (const species of ['neon', 'guppy', 'shrimp']) {
+    const group = state.animals.filter(a => a.species === species);
+    if (group.every(a => a.sex === group[0].sex)) {
+      group[1].sex = group[0].sex === 'male' ? 'female' : 'male';
+    }
+  }
   state.water.unionizedAmmonia = state.water.ammonia * ammoniaFraction(state.water.temperature, state.water.ph);
   record(state, '60 L 淡水缸已建立，生物过滤已成熟。少量投喂，定期换水。');
   return state;
 }
 
-export function addAnimal(state, species) {
+export function addAnimal(state, species, sex) {
   if (!Object.hasOwn(SPECIES, species)) return { ok: false, message: '未知生物种类' };
-  if (state.animals.length >= MAX_ANIMALS) return { ok: false, message: `鱼缸最多容纳 ${MAX_ANIMALS} 只生物，请先清理死亡个体。` };
+  if (!availableAnimalSlots(state)) {
+    const message = state.broods.length ? '余下的位置已留给孕育中的幼体。' : '鱼缸已满，可先移出生物或捞起遗体。';
+    return { ok: false, message };
+  }
   const added = animal(species, state.nextAnimalNumber++);
+  if (sex === 'male' || sex === 'female') added.sex = sex;
   state.animals.push(added);
   record(state, `加入 1 只${SPECIES[species].name}；生物负载增加。`);
   return { ok: true, animal: added, message: `已加入${SPECIES[species].name}` };
@@ -271,6 +303,7 @@ export function removeAnimal(state, id) {
   const index = state.animals.findIndex(animal => animal.id === id);
   if (index < 0) return { ok: false, message: '这只生物已不在缸中' };
   const [animal] = state.animals.splice(index, 1);
+  if (removeAttachedBroods(state, id)) record(state, `${animal.label}携带的幼体随母体移出鱼缸。`);
   const message = animal.alive ? `已移出${animal.label}` : `已捞起${animal.label}的遗骸`;
   record(state, message);
   return { ok: true, message };
@@ -307,7 +340,9 @@ function removeSceneryItem(state, items, id, label) {
 }
 
 export function removePlant(state, id) {
-  return removeSceneryItem(state, state.plants, id, plant => PLANTS[plant.species].name);
+  const result = removeSceneryItem(state, state.plants, id, plant => PLANTS[plant.species].name);
+  if (result.ok && removeAttachedBroods(state, id)) record(state, '附着在这丛水草上的鱼卵也已移出。');
+  return result;
 }
 
 export function removeHardscape(state, id) {
@@ -368,6 +403,8 @@ export function getAssessment(state) {
   return { level: 'good', label: '生态稳定', message: '过滤、溶氧和氮循环正常。少量投喂，保持观察。' };
 }
 
+const reproductionModel = { species: SPECIES, stage: animalLifeStage, spawn: spawnOffspring, record, substrateHeight };
+
 function integrate(state, dt) {
   const w = state.water;
   const e = state.equipment;
@@ -382,13 +419,15 @@ function integrate(state, dt) {
   living.forEach(a => {
     a.ageHours += dt;
     const spec = SPECIES[a.species];
-    if (spec.type === 'fish') growFish(a, spec, dt);
+    growAnimal(a, spec, dt);
     a.hunger = clamp(a.hunger + (spec.type === 'fish' ? 0.9 : 0.45) * a.metabolism * thermal * dt, 0, 100);
     // Bottom dwellers graze established biofilm and detritus, not nitrogen itself.
     if (spec.type === 'invertebrate') {
-      const grazed = Math.min(state.detritus, 0.0005 * dt);
+      // Young grazers eat less detritus for the same change in fullness.
+      const ration = Math.min(1, a.mass / spec.mass);
+      const grazed = Math.min(state.detritus, 0.0005 * ration * dt);
       state.detritus -= grazed;
-      a.hunger = Math.max(0, a.hunger - (grazed * 900 + 0.32 * dt));
+      a.hunger = Math.max(0, a.hunger - (grazed * 900 / ration + 0.32 * dt));
       w.ammonia += grazed * 70 / liters * 0.55;
     }
   });
@@ -472,6 +511,7 @@ function integrate(state, dt) {
     a.health = clamp(a.health + (healing - damage) * dt, 0, healthCeiling);
     if (a.health <= 0) {
       a.alive = false;
+      if (removeAttachedBroods(state, a.id)) record(state, `${a.label}携带的幼体未能存活。`);
       if (a.infection) a.infection = null;
       a.deathHours = state.elapsedHours + dt;
       a.corpseMass = a.mass;
@@ -483,7 +523,9 @@ function integrate(state, dt) {
       record(state, `${a.label}因${a.causeOfDeath}死亡。请捞起遗骸，避免继续污染水质。`, 'death');
     }
   }
+  const previousHours = state.elapsedHours;
   state.elapsedHours += dt;
+  advanceReproduction(state, previousHours, reproductionModel);
   const sick = startScheduledInfection(state, SPECIES);
   if (sick) record(state, `${sick.label}出现${INFECTIONS[sick.infection.kind].label}，可打开个体档案护理。`, 'warning');
 }
@@ -542,7 +584,7 @@ function restoreFishAge(fish, saved, spec) {
   }
   fish.lifespanHours = numeric(oldLife, fish.lifespanHours, life * .85, life * 1.15);
   // Before v0.7.0 only residence time was saved. Give established adults time to live.
-  const estimatedAge = Math.min(maturity + fish.ageHours, fish.lifespanHours * .6);
+  const estimatedAge = fish.origin === 'born' ? fish.ageHours : Math.min(maturity + fish.ageHours, fish.lifespanHours * .6);
   fish.lifeAgeHours = numeric(saved.lifeAgeHours, estimatedAge, 0, 1e7);
 }
 
@@ -583,17 +625,29 @@ export function restoreState(raw) {
       restored.label = typeof a.label === 'string' && a.label.trim() ? a.label.slice(0,80) : restored.label;
       const spec = SPECIES[a.species];
       const fish = spec.type === 'fish';
+      if (a.sex === 'male' || a.sex === 'female') restored.sex = a.sex;
+      if (a.origin === 'born') {
+        restored.origin = 'born';
+        for (const field of ['motherId', 'fatherId']) {
+          if (typeof a[field] === 'string' && a[field].length > 0 && a[field].length <= 100) restored[field] = a[field];
+        }
+      }
+      restored.nextBreedHours = numeric(a.nextBreedHours, 0, 0, base.elapsedHours + 1000);
       // Old angelfish labels named a life stage in the species name.
       const number = String(restored.serial).padStart(2, '0');
       if (a.species === 'angelfish' && restored.label === `神仙鱼（幼鱼） #${number}`) {
         restored.label = `神仙鱼 #${number}`;
       }
-      const legacyBody = !Number.isFinite(a.lifeAgeHours);
+      const legacyBody = restored.origin === 'stocked' && !Number.isFinite(a.lifeAgeHours);
       const defaultSize = legacyBody ? .85 + random(restored.seed + 21) * .35 : restored.size;
-      restored.size = numeric(a.size, defaultSize, .6, 1.5);
-      const defaultMass = spec.mass * restored.size ** (legacyBody ? 2 : 3);
-      restored.mass = numeric(a.mass, defaultMass, .03, 3);
+      restored.size = numeric(a.size, defaultSize, .2, 1.5);
+      const defaultMass = spec.mass * restored.size ** (legacyBody || (!fish && restored.origin === 'stocked') ? 2 : 3);
+      restored.mass = numeric(a.mass, defaultMass, spec.mass * .2 ** 3, 3);
       if (fish) restoreFishAge(restored, a, spec);
+      else {
+        const estimatedAge = restored.ageHours + (restored.origin === 'stocked' ? spec.maturityDays * 24 : 0);
+        restored.lifeAgeHours = numeric(a.lifeAgeHours, estimatedAge, 0, 1e7);
+      }
       if (fish && restored.alive) restored.infection = restoreInfection(a.infection);
       restored.metabolism = numeric(a.metabolism,restored.metabolism,.65,1.5);
       for (const [axis,min,max] of [['x',-3.65,3.65],['y',.15,4.05],['z',-1.65,1.65]]) restored.position[axis] = numeric(a.position?.[axis],restored.position[axis],min,max);
@@ -646,6 +700,7 @@ export function restoreState(raw) {
     });
   }
   base.nextAnimalNumber = Math.max(Math.round(numeric(data.nextAnimalNumber,1,1,1e8)),...base.animals.map(a=>a.serial+1),1);
+  restoreBroods(base, data.broods);
   const usedLabels = new Set();
   for (const a of base.animals) {
     if (usedLabels.has(a.label)) { a.serial=base.nextAnimalNumber++; a.label=`${SPECIES[a.species].name} #${String(a.serial).padStart(2,'0')}`; }

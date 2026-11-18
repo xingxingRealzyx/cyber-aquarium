@@ -1,27 +1,12 @@
 import * as THREE from 'three';
 import { substrateHeight } from './simulation.js';
+import { plantBed, plantRandom } from './plant-layout.js';
 
 const TAU = Math.PI * 2;
 const clamp = THREE.MathUtils.clamp;
 const v3 = (x, y, z) => new THREE.Vector3(x, y, z);
 const atlasSize = [1280, 1024];
-const initialBeds = {
-  vallisneria: [[-3.06,-1.2], [-1.9,-1.32], [2,-1.32], [3.02,-.94]],
-  anubias: [[-3.04,.52], [-1.93,1.05], [1.64,1.06]],
-  moss: [[2.59,1.22], [-2.46,.99]],
-};
 let atlas;
-
-function randomStream(seed) {
-  let state = 2166136261;
-  for (const c of String(seed)) state = Math.imul(state ^ c.charCodeAt(0), 16777619);
-  return () => {
-    state = state + 0x6d2b79f5 | 0;
-    let x = Math.imul(state ^ state >>> 15, 1 | state);
-    x ^= x + Math.imul(x ^ x >>> 7, 61 | x);
-    return ((x ^ x >>> 14) >>> 0) / 4294967296;
-  };
-}
 
 function loadAtlas(manager) {
   if (!atlas) {
@@ -102,7 +87,7 @@ class PlantMesh {
     return index;
   }
 
-  grid(rows, columns, tile, tint, sample) {
+  grid(rows, columns, tile, tint, sample, attachEggs = true) {
     const first = this.positions.length / 3;
     for (let row = 0; row <= rows; row++) {
       for (let column = 0; column <= columns; column++) {
@@ -114,6 +99,15 @@ class PlantMesh {
           this.indices.push(i, i + columns + 1, i + 1, i + 1, i + columns + 1, i + columns + 2);
         }
       }
+    }
+    if (attachEggs) {
+      const middle = first + Math.floor(rows / 2) * (columns + 1) + Math.floor(columns / 2);
+      const point = new THREE.Vector3().fromArray(this.positions, middle * 3);
+      const along = new THREE.Vector3().fromArray(this.positions, (middle + columns + 1) * 3).sub(point);
+      const across = new THREE.Vector3().fromArray(this.positions, (middle + 1) * 3).sub(point);
+      const normal = along.cross(across).normalize();
+      if (normal.y < 0) normal.negate();
+      this.leafSites.push({ point, normal, flex: this.flex[middle] });
     }
   }
 
@@ -176,7 +170,7 @@ function grassBlade(batch, root, height, halfWidth, heading, leanX, leanZ, rng, 
       shade: .67 + .32 * Math.min(1, t * 3.3),
       flex: t ** 1.6 * height * (short ? .28 : .77),
     };
-  });
+  }, !short);
 }
 
 function vallisneria(batch, x, z, growth, rng) {
@@ -320,13 +314,14 @@ export function createAquaticPlants(plants, time, manager) {
   group.name = 'Aquatic vegetation';
   if (!plants.length) return group;
   const batch = new PlantMesh();
+  group.userData.leafSites = new Map();
   const grow = { vallisneria, anubias, moss };
   for (const plant of plants) {
     const kind = Object.hasOwn(grow, plant.species) ? plant.species : 'vallisneria';
-    const rng = randomStream(plant.seed ?? plant.id);
-    const position = initialBeds[kind][plant.slot];
-    const x = position?.[0] ?? (rng() - .5) * 6.4;
-    const z = position?.[1] ?? (kind === 'vallisneria' ? -1.39 + rng() * .63 : (rng() - .43) * 2.8);
+    const rng = plantRandom(plant.seed ?? plant.id);
+    const { x, z } = plantBed(plant, rng);
+    batch.leafSites = [];
+    group.userData.leafSites.set(plant.id, batch.leafSites);
     const size = clamp(Math.cbrt(plant.biomass ?? 1), .54, 1.25);
     grow[kind](batch, x, z, size, rng);
     if (kind === 'vallisneria') youngShoots(batch, x, z + .3, rng);

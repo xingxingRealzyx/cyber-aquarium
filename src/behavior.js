@@ -8,11 +8,24 @@ const random = seed => { const n=Math.sin(seed*127.1+311.7)*43758.5453;return n-
 const distance = (a,b) => Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
 const FISH_MIN_Y=.67;
 
-function roamTarget(animal,time) {
+function roamTarget(animal,time,broods) {
   const seed=animal.seed;
   if(SPECIES[animal.species].type!=='fish') {
     const x=Math.sin(time*.035+seed*6.283)*2.8,z=Math.cos(time*.026+seed*7.4)*1.25;
     return {x,y:substrateHeight(x,z)+.025,z};
+  }
+  if (animal.species === 'angelfish') {
+    const clutch = broods?.find(b => b.species === 'angelfish' && (b.motherId === animal.id || b.fatherId === animal.id));
+    if (clutch) {
+      // Keep each parent near its clutch, with room to turn along the inside of the glass.
+      const nest = clutch.position;
+      const side = animal.id === clutch.motherId ? -1 : 1;
+      return {
+        x: clamp(nest.x + side * .32 + .12 * Math.sin(time * .4 + seed), -3.45, 3.45),
+        y: clamp(nest.y + .32 + .10 * Math.cos(time * .3), .9, 3.82),
+        z: clamp(nest.z + .12 * Math.sin(time * .5 + seed), -1.48, 1.48),
+      };
+    }
   }
   // A shared slow school center with individual offsets leaves calm, continuous paths.
   const swim = SPECIES[animal.species].swim;
@@ -89,7 +102,7 @@ function step(state,dt) {
     const gasping=fish&&state.water.oxygen<3;
     const food=!gasping&&a.hunger>=8?chooseFood(state,a,reserved):null;
     if(food){reserved.add(food.id);a.targetFoodId=food.id;}else a.targetFoodId=null;
-    let target=food||roamTarget(a,time);
+    let target=food||roamTarget(a,time,state.broods);
     if(gasping)target={x:target.x,y:3.88,z:target.z};
     a.behavior=gasping?'gasping':a.biteFlash>0?'eating':food?'seeking':fish?(a.hunger<8?'resting':'swimming'):'grazing';
     const dx=target.x-pos.x,dy=target.y-pos.y,dz=target.z-pos.z;
