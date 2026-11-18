@@ -30,11 +30,53 @@ delete env.ELECTRON_RENDERER_URL;
 const apps = new Set();
 let restartedPid;
 
+function alive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error.code !== 'ESRCH'; }
+}
+
+function bounded(promise, ms, operation) {
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Timed out: ' + operation)), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function closeAquarium(application) {
+  const pid = application.process().pid;
+  console.log('Quitting current packaged aquarium', pid);
+  await bounded(application.evaluate(({ app }) => { setTimeout(() => app.quit(), 50); }), 15000, 'requesting app.quit()');
+  await waitFor(() => !alive(pid), 'packaged aquarium ' + pid + ' failed to quit', 45000);
+  apps.delete(application);
+}
+
+async function stopTestProcess(pid) {
+  if (!pid || !alive(pid)) return;
+  if (mac) process.kill(pid, 'SIGKILL');
+  else await run(path.join(process.env.SystemRoot, 'System32/taskkill.exe'), ['/pid', String(pid), '/t', '/f'], { timeout: 12000, windowsHide: true }).catch(() => {});
+}
+
+async function showStage(stage) {
+  const files = await readdir(stage).catch(() => []);
+  const details = {};
+  for (const file of ['plan.json', 'journal.json', 'launched.json', 'error.txt', 'rollback', 'ready', 'finished']) {
+    if (!files.includes(file)) continue;
+    const value = await readFile(path.join(stage, file), 'utf8').catch(() => '');
+    if (file === 'plan.json' || file === 'journal.json' || file === 'launched.json') {
+      const record = JSON.parse(value);
+      const pid = record.workerPid || record.pid;
+      details[file] = { pid, running: alive(pid) };
+    } else details[file] = value;
+  }
+  console.log('Update stage', path.basename(stage), files, details);
+}
+
 async function waitFor(check, message, timeout = 150000) {
   const until = Date.now() + timeout;
+  let nextReport = Date.now() + 20000;
   do {
     const result = await check();
     if (result) return result;
+    if (Date.now() > nextReport) { console.log('Waiting:', message); nextReport += 20000; }
     await delay(125);
   } while (Date.now() < until);
   throw new Error(message);
@@ -51,7 +93,7 @@ async function openTestWindow() {
     console.log('Opening the isolated aquarium with', backend.name);
     const application = await electron.launch({ executablePath: exe, args: [...args, ...backend.flags], env, timeout: 90000 });
     apps.add(application);
-    const page = await application.firstWindow();
+    const page = await application.firstWindow({ timeout: 60000 });
     page.on('pageerror', error => console.log('Renderer exception:', error.message));
     page.on('console', msg => { if (msg.type() === 'error') console.log('Renderer error:', msg.text()); });
     const describe = () => page.evaluate(() => ({
@@ -76,8 +118,7 @@ async function openTestWindow() {
       return { application, page };
     }
     if (!/creating WebGL context|WebGL 2.*(?:unavailable|not supported)/i.test(result.error)) throw new Error(result.error);
-    await application.close();
-    apps.delete(application);
+    await closeAquarium(application);
   }
   throw new Error('No available adapter rendered the isolated aquarium.');
 }
@@ -89,13 +130,14 @@ async function openAndStage(firstRun) {
   const workDir = await mkdtemp(path.join(temp, 'download-'));
   const archivePath = path.join(workDir, 'aquarium.zip');
   await copyFile(archive, archivePath);
-  await application.evaluate(async ({ app }, options) => {
+  console.log('Extracting and validating the real CI archive');
+  await bounded(application.evaluate(async ({ app }, options) => {
     const load = process.getBuiltinModule('node:module').createRequire(app.getAppPath() + '/package.json');
     const installer = load('./electron/update-installer.cjs');
     await installer.stageAndLaunchInstaller({
       ...options, executablePath: process.execPath, platform: process.platform, pid: process.pid, userDataPath: app.getPath('userData'),
     });
-  }, { archivePath, workDir, version });
+  }, { archivePath, workDir, version }), 150000, 'preparing update and launching worker');
   const stages = (await readdir(directory)).filter(file => file.startsWith('.cyber-aquarium-update-'));
   assert.equal(stages.length, 1);
   console.log('Update prepared:', stages[0]);
@@ -120,7 +162,7 @@ async function verifyRelaunch(stage, expectRecovery = false) {
   await waitFor(async () => !(await stat(stage).catch(() => null)), 'The update left its stage or backups behind');
   await waitFor(async () => !(await stat(rescue).catch(() => null)), 'The launcher was not retired after a successful restart');
   assert.equal(await readFile(personalFile, 'utf8'), 'personal file');
-  process.kill(restartedPid);
+  await stopTestProcess(restartedPid);
   await waitFor(() => { try { process.kill(restartedPid, 0); return false; } catch { return true; } }, 'Isolated relaunch did not exit');
   restartedPid = undefined;
 }
@@ -132,8 +174,7 @@ try {
   await writeFile(personalFile, 'personal file');
   const original = await stat(exe, { bigint: true });
   const normal = await openAndStage(true);
-  await normal.application.close();
-  apps.delete(normal.application);
+  await closeAquarium(normal.application);
   await verifyRelaunch(normal.stage);
   assert.notEqual((await stat(exe, { bigint: true })).ino, original.ino, 'the installed executable was replaced');
   console.log('Verified staged installation, first-frame acknowledgement, restart and cleanup.');
@@ -142,21 +183,33 @@ try {
   const interrupted = await openAndStage(false);
   const journal = JSON.parse(await readFile(path.join(interrupted.stage, 'journal.json'), 'utf8'));
   process.kill(journal.workerPid, 'SIGKILL');
-  await interrupted.application.close();
-  apps.delete(interrupted.application);
+  await closeAquarium(interrupted.application);
   const previous = path.join(interrupted.stage, 'previous');
   if (mac) await rename(appRoot, previous);
   else {
     await mkdir(path.join(previous, 'resources'), { recursive: true });
     await rename(path.join(appRoot, 'resources/app.asar'), path.join(previous, 'resources/app.asar'));
   }
-  if (mac) await run('/bin/sh', [rescue]);
-  else await run(path.join(process.env.SystemRoot, 'System32/cmd.exe'), ['/d', '/c', 'call ".\\Recover Cyber Aquarium.cmd"'], { cwd: directory, windowsVerbatimArguments: true });
+  console.log('Invoking the recovery launcher on the interrupted install');
+  if (mac) await run('/bin/sh', [rescue], { timeout: 90000 });
+  else await run(path.join(process.env.SystemRoot, 'System32/cmd.exe'), ['/d', '/c', 'call ".\\Recover Cyber Aquarium.cmd" <nul'], { cwd: directory, windowsVerbatimArguments: true, timeout: 90000 });
   await verifyRelaunch(interrupted.stage, true);
   await access(exe);
   console.log('Verified interrupted installation recovery, saved profile and unrelated files.');
+} catch (error) {
+  console.error('Isolated update smoke failed:', error);
+  for (const entry of await readdir(directory).catch(() => [])) {
+    if (!entry.startsWith('.cyber-aquarium-update-')) continue;
+    const stage = path.join(directory, entry);
+    await showStage(stage).catch(() => {});
+    for (const file of ['journal.json', 'launched.json']) {
+      const record = JSON.parse(await readFile(path.join(stage, file), 'utf8').catch(() => 'null'));
+      if (record) await stopTestProcess(record.workerPid || record.pid);
+    }
+  }
+  throw error;
 } finally {
-  for (const application of apps) await application.close().catch(() => {});
-  if (restartedPid) { try { process.kill(restartedPid); } catch { /* already exited */ } }
-  await rm(temp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  for (const application of apps) await stopTestProcess(application.process().pid);
+  await stopTestProcess(restartedPid);
+  await rm(temp, { recursive: true, force: true, maxRetries: 1, retryDelay: 100 }).catch(error => console.error('Isolated directory cleanup:', error.message));
 }

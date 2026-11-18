@@ -134,6 +134,7 @@ async function startAquarium(plan) {
   });
   await new Promise((resolve, reject) => { app.once('spawn', resolve); app.once('error', reject); });
   app.unref();
+  await fs.writeFile(path.join(stage, 'launched.json'), JSON.stringify({ pid: app.pid }), { flush: true }).catch(() => {});
   return app;
 }
 
@@ -158,7 +159,8 @@ async function main() {
       throw error;
     });
     const journal = saved && JSON.parse(saved);
-    if (alive(plan.pid) || (journal && alive(journal.workerPid))) throw new Error('请先关闭鱼缸并等待当前更新助手退出。');
+    const launched = JSON.parse(await fs.readFile(path.join(stage, 'launched.json'), 'utf8').catch(() => 'null'));
+    if (alive(plan.pid) || (journal && alive(journal.workerPid)) || (launched && alive(launched.pid))) throw new Error('请先关闭鱼缸并等待当前更新助手退出。');
     if (journal) await restore(plan, journal);
     await fs.unlink(path.join(stage, 'ready')).catch(() => {});
     await fs.writeFile(path.join(stage, 'rollback'), '已从更新备份恢复。');
