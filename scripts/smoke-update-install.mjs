@@ -23,7 +23,7 @@ const exe = path.join(appRoot, mac ? 'Contents/MacOS/' + name : name + '.exe');
 const rescue = path.join(directory, 'Recover Cyber Aquarium.' + (mac ? 'command' : 'cmd'));
 const personalFile = path.join(directory, 'my aquarium notes.txt');
 const args = ['--user-data-dir=' + profile];
-if (process.env.CI || !mac) args.push('--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader');
+let selectedBackend;
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 delete env.ELECTRON_RENDERER_URL;
@@ -40,11 +40,50 @@ async function waitFor(check, message, timeout = 150000) {
   throw new Error(message);
 }
 
+async function openTestWindow() {
+  const defaults = { name: 'default', flags: [] };
+  const alternatives = [
+    ...(mac ? [{ name: 'ANGLE OpenGL', flags: ['--use-gl=angle', '--use-angle=gl', '--ignore-gpu-blocklist'] }] : []),
+    { name: 'SwiftShader', flags: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] },
+  ];
+  const options = selectedBackend ? [selectedBackend] : [defaults, ...(process.env.CI ? alternatives : [])];
+  for (const backend of options) {
+    console.log('Opening the isolated aquarium with', backend.name);
+    const application = await electron.launch({ executablePath: exe, args: [...args, ...backend.flags], env, timeout: 90000 });
+    apps.add(application);
+    const page = await application.firstWindow();
+    page.on('pageerror', error => console.log('Renderer exception:', error.message));
+    page.on('console', msg => { if (msg.type() === 'error') console.log('Renderer error:', msg.text()); });
+    const describe = () => page.evaluate(() => ({
+      visible: document.visibilityState, ready: document.readyState, app: location.href,
+      error: document.querySelector('#error')?.hidden === false ? document.querySelector('#error small').textContent : null,
+      adapter: document.querySelector('#render-stat')?.title, stats: window.aquariumDiagnostics?.stats,
+      triangles: window.aquariumDiagnostics?.renderer?.triangles, canvas: document.querySelector('canvas')?.style.visibility,
+    }));
+    try {
+      await page.waitForFunction(() => document.querySelector('#error')?.hidden === false ||
+        (window.aquariumDiagnostics?.renderer?.triangles > 0 && document.querySelector('canvas')?.style.visibility !== 'hidden'),
+        null, { timeout: 120000 });
+    } catch (error) {
+      console.log('Timed out waiting for a packaged frame:', await describe());
+      throw error;
+    }
+    const result = await describe();
+    const gpu = await application.evaluate(({ app }) => ({ acceleration: app.isHardwareAccelerationEnabled(), webgl: app.getGPUFeatureStatus().webgl }));
+    console.log('Isolated aquarium frame:', backend.name, JSON.stringify({ ...gpu, ...result }));
+    if (!result.error) {
+      selectedBackend = backend;
+      return { application, page };
+    }
+    if (!/creating WebGL context|WebGL 2.*(?:unavailable|not supported)/i.test(result.error)) throw new Error(result.error);
+    await application.close();
+    apps.delete(application);
+  }
+  throw new Error('No available adapter rendered the isolated aquarium.');
+}
+
 async function openAndStage(firstRun) {
-  const application = await electron.launch({ executablePath: exe, args, env, timeout: 90000 });
-  apps.add(application);
-  const page = await application.firstWindow();
-  await page.waitForFunction(() => window.aquariumDiagnostics?.stats?.triangles > 0, null, { timeout: 120000 });
+  const { application, page } = await openTestWindow();
   if (firstRun) await page.evaluate(() => localStorage.setItem('smoke-update-stock', 'keep-this-tank'));
   else assert.equal(await page.evaluate(() => localStorage.getItem('smoke-update-stock')), 'keep-this-tank');
   const workDir = await mkdtemp(path.join(temp, 'download-'));
@@ -59,12 +98,17 @@ async function openAndStage(firstRun) {
   }, { archivePath, workDir, version });
   const stages = (await readdir(directory)).filter(file => file.startsWith('.cyber-aquarium-update-'));
   assert.equal(stages.length, 1);
+  console.log('Update prepared:', stages[0]);
   await access(rescue);
   return { application, stage: path.join(directory, stages[0]) };
 }
 
-async function verifyRelaunch(stage) {
+async function verifyRelaunch(stage, expectRecovery = false) {
   const ack = await waitFor(async () => {
+    const failure = await readFile(path.join(stage, 'error.txt'), 'utf8').catch(() => '');
+    if (failure) throw new Error('Update worker failed: ' + failure);
+    const rollback = await readFile(path.join(stage, 'rollback'), 'utf8').catch(() => '');
+    if (rollback && !expectRecovery) throw new Error('Update rolled back: ' + rollback);
     const record = await readFile(path.join(stage, 'ready'), 'utf8').catch(() => '');
     return record && JSON.parse(record);
   }, 'The newly launched fish tank never acknowledged its first frame');
@@ -108,7 +152,7 @@ try {
   }
   if (mac) await run('/bin/sh', [rescue]);
   else await run(path.join(process.env.SystemRoot, 'System32/cmd.exe'), ['/d', '/c', 'call ".\\Recover Cyber Aquarium.cmd"'], { cwd: directory, windowsVerbatimArguments: true });
-  await verifyRelaunch(interrupted.stage);
+  await verifyRelaunch(interrupted.stage, true);
   await access(exe);
   console.log('Verified interrupted installation recovery, saved profile and unrelated files.');
 } finally {

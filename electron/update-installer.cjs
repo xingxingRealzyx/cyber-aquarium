@@ -120,7 +120,7 @@ async function stageAndLaunchInstaller({ archivePath, workDir, version, executab
       if (bundle.stdout.trim() !== 'com.cyberaquarium.desktop') throw new Error('更新包的应用标识不正确。');
     }
     const recoveryPath = path.join(stageParent, 'Recover Cyber Aquarium.' + (mac ? 'command' : 'cmd'));
-    const graphicsArgs = process.argv.filter(arg => ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'].includes(arg));
+    const graphicsArgs = process.argv.filter(arg => ['--use-gl=angle', '--use-angle=gl', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'].includes(arg));
     const plan = { destination, candidate, executablePath, userDataPath, graphicsArgs, recoveryPath, pid, token: randomUUID() };
     if (!mac) {
       plan.previous = await managedFiles(destination);
