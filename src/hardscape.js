@@ -145,7 +145,7 @@ export function createHardscape(manager) {
     mesh.receiveShadow = true;
     mesh.visible = false;
     group.add(mesh);
-    return { mesh, kind, geometryFor, signature: '' };
+    return { mesh, kind, geometryFor, signature: '', bounds: [] };
   });
 
   function update(items) {
@@ -154,6 +154,10 @@ export function createHardscape(manager) {
       const signature = slots.join(',');
       if (signature === batch.signature) continue;
       const pieces = slots.map(batch.geometryFor);
+      batch.bounds = pieces.map(piece => {
+        piece.computeBoundingBox();
+        return piece.boundingBox;
+      });
       const geometry = pieces.length ? mergeGeometries(pieces) : new THREE.BufferGeometry();
       for (const piece of pieces) piece.dispose();
       batch.mesh.geometry.dispose();
@@ -162,5 +166,20 @@ export function createHardscape(manager) {
       batch.signature = signature;
     }
   }
-  return { group, update };
+  // The broad return current travels over the rocks and branches. Ease its
+  // lower edge upwards before the drifting figure reaches a piece of scenery.
+  function driftFloor(x, z) {
+    const sand = substrateHeight(x, z);
+    let floor = sand;
+    for (const { bounds } of batches) {
+      for (const box of bounds) {
+        const dx = Math.max(box.min.x - x, 0, x - box.max.x);
+        const dz = Math.max(box.min.z - z, 0, z - box.max.z);
+        const weight = 1 - THREE.MathUtils.smoothstep(Math.hypot(dx, dz), .34, .90);
+        floor = Math.max(floor, sand + (box.max.y - sand) * weight);
+      }
+    }
+    return floor;
+  }
+  return { group, update, driftFloor };
 }

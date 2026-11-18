@@ -38,8 +38,18 @@ export const HARDSCAPE = Object.freeze({
   wood: { name: '沉木', starterCount: 5 },
 });
 
+export const TOYS = Object.freeze({
+  duck: { name: '小黄鸭' },
+  diver: { name: '潜水员' },
+});
+
 export const MAX_PLANTS = 40;
 export const MAX_HARDSCAPE = 40;
+export const MAX_TOYS = 12;
+const decorations = {
+  hardscape: { catalog: HARDSCAPE, limit: MAX_HARDSCAPE, label: '造景', idPrefix: 'scenery' },
+  toys: { catalog: TOYS, limit: MAX_TOYS, label: '玩具', idPrefix: 'toy' },
+};
 export const MAX_BED_PELLETS = 160;
 const MAX_SURFACE_PELLETS = 160;
 const MAX_FALLING_PELLETS = 320;
@@ -259,6 +269,7 @@ export function createInitialState() {
       .flatMap(([species, count]) => Array.from({ length: count }, (_, slot) => plant(species, slot))),
     hardscape: Object.entries(HARDSCAPE).flatMap(([kind, { starterCount }]) =>
       Array.from({ length: starterCount }, (_, slot) => ({ id: key('scenery'), kind, slot }))),
+    toys: [], currentSeconds: 0,
     bacteria: { ammonia: 1, nitrite: 1 }, food: 0, foodPellets: [], detritus: 0.01,
     nextAnimalNumber: 13, behaviorSeconds: 0, broods: [],
     alkalinity: 4, events: [], history: [], lastFedHours: null, lastWaterChangeHours: 0,
@@ -319,15 +330,25 @@ export function addPlant(state, species) {
   return { ok: true, plant: added, message: `已种下${PLANTS[species].name}` };
 }
 
-export function addHardscape(state, kind) {
-  if (!Object.hasOwn(HARDSCAPE, kind)) return { ok: false, message: '未知造景种类' };
-  if (state.hardscape.length >= MAX_HARDSCAPE) return { ok: false, message: `最多放置 ${MAX_HARDSCAPE} 件造景。` };
-  const used = new Set(state.hardscape.filter(item => item.kind === kind).map(item => item.slot));
-  const added = { id: key('scenery'), kind, slot: availableSlot(used, null, MAX_HARDSCAPE) };
-  state.hardscape.push(added);
-  const message = `已放入${HARDSCAPE[kind].name} #${added.slot + 1}`;
+function addDecoration(state, collection, kind) {
+  const { catalog, limit, label, idPrefix } = decorations[collection];
+  const items = state[collection];
+  if (typeof kind !== 'string' || !Object.hasOwn(catalog, kind)) return { ok: false, message: `未知${label}种类` };
+  if (items.length >= limit) return { ok: false, message: `最多放置 ${limit} 件${label}。` };
+  const used = new Set(items.filter(item => item.kind === kind).map(item => item.slot));
+  const added = { id: key(idPrefix), kind, slot: availableSlot(used, null, limit) };
+  items.push(added);
+  const message = `已放入${catalog[kind].name} #${added.slot + 1}`;
   record(state, message);
   return { ok: true, item: added, message };
+}
+
+export function addHardscape(state, kind) {
+  return addDecoration(state, 'hardscape', kind);
+}
+
+export function addToy(state, kind) {
+  return addDecoration(state, 'toys', kind);
 }
 
 function removeSceneryItem(state, items, id, label) {
@@ -347,6 +368,10 @@ export function removePlant(state, id) {
 
 export function removeHardscape(state, id) {
   return removeSceneryItem(state, state.hardscape, id, item => HARDSCAPE[item.kind].name);
+}
+
+export function removeToy(state, id) {
+  return removeSceneryItem(state, state.toys, id, item => TOYS[item.kind].name);
 }
 
 /** Adds dry food in grams. Excess remains in the tank, consuming oxygen as it decays. */
@@ -610,6 +635,7 @@ export function restoreState(raw) {
   }
   base.equipment.targetTemperature = numeric(data.equipment?.targetTemperature, 25, 16, 34);
   base.behaviorSeconds = numeric(data.behaviorSeconds,0,0,1e10);
+  base.currentSeconds = numeric(data.currentSeconds, base.behaviorSeconds, 0, 1e10);
   if (Array.isArray(data.animals)) {
     const usedIds = new Set();
     base.animals = data.animals.filter(a => a && Object.hasOwn(SPECIES, a.species)).slice(0, MAX_ANIMALS).map((a,index) => {
@@ -686,15 +712,16 @@ export function restoreState(raw) {
       return restored;
     });
   }
-  if (Array.isArray(data.hardscape)) {
+  for (const [collection, { catalog, limit, idPrefix }] of Object.entries(decorations)) {
+    if (!Array.isArray(data[collection])) continue;
     const usedIds = new Set();
-    const slots = new Map(Object.keys(HARDSCAPE).map(kind => [kind, new Set()]));
-    base.hardscape = data.hardscape.filter(item => item && Object.hasOwn(HARDSCAPE, item.kind)).slice(0, MAX_HARDSCAPE).map(item => {
+    const slots = new Map(Object.keys(catalog).map(kind => [kind, new Set()]));
+    base[collection] = data[collection].filter(item => item && typeof item.kind === 'string' && Object.hasOwn(catalog, item.kind)).slice(0, limit).map(item => {
       const used = slots.get(item.kind);
-      const slot = availableSlot(used, item.slot, MAX_HARDSCAPE);
+      const slot = availableSlot(used, item.slot, limit);
       used.add(slot);
       const validId = typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 100 && !usedIds.has(item.id);
-      const id = validId ? item.id : key('scenery');
+      const id = validId ? item.id : key(idPrefix);
       usedIds.add(id);
       return { id, kind: item.kind, slot };
     });

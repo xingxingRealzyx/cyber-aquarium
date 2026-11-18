@@ -70,6 +70,7 @@ try{
   const first=await page.evaluate(()=>window.aquariumDiagnostics);
   assert.equal(first.state.animals.length,12);
   assert.equal(first.state.plants.length,9);
+  assert.deepEqual(first.state.toys, []);
   await page.mouse.move(500,400);
   await page.getByRole('button',{name:'投喂',exact:true}).click();
   assert.ok((await page.evaluate(()=>window.aquariumDiagnostics.state.food))>0);
@@ -91,6 +92,27 @@ try{
     assert.equal(pieces.filter(piece=>piece.kind===kind).length,initialScenery.filter(piece=>piece.kind===kind).length);
     assert.ok(!pieces.some(piece=>piece.id===item.id));
   }
+  const addDuck = page.locator('[data-add-toy="duck"]');
+  await addDuck.click();
+  await addDuck.click();
+  await page.locator('[data-add-toy="diver"]').click();
+  await page.waitForFunction(() => window.aquariumDiagnostics.screenToys.length === 3);
+  const firstDuck = await page.evaluate(() => window.aquariumDiagnostics.state.toys[0].id);
+  await page.locator('[data-show-kind="duck"]').click();
+  await page.locator(`.placed-items [data-remove-toy="${firstDuck}"]`).click();
+  await page.waitForFunction(id => {
+    const toys = window.aquariumDiagnostics.screenToys;
+    return toys.length === 2 && toys.every(t => t.id !== id && t.visible);
+  }, firstDuck);
+  const beforeDrift = await page.evaluate(() => window.aquariumDiagnostics.screenToys);
+  await page.waitForFunction(previous => window.aquariumDiagnostics.screenToys.every(toy => {
+    const start = previous.find(t => t.id === toy.id).world;
+    return Math.hypot(toy.world.x - start.x, toy.world.z - start.z) > 0.005;
+  }), beforeDrift);
+  const floating = await page.evaluate(() => window.aquariumDiagnostics.screenToys);
+  const waterline = floating.find(t => t.kind === 'duck').world.y;
+  assert.ok(Math.abs(waterline - 4.14) < 0.08, 'duck sits at the visible waterline');
+  assert.ok(floating.find(t => t.kind === 'diver').world.y < waterline, 'diver is submerged');
   assert.equal((await page.evaluate(()=>window.aquariumDiagnostics.state.animals.length)),13);
   assert.equal((await page.evaluate(()=>window.aquariumDiagnostics.state.plants.length)),10);
   await page.locator('[data-tab="life"]').click();
@@ -125,6 +147,7 @@ try{
   await page.locator('[data-speed="3600"]').click();
   await page.locator('[data-action="pause"]').click();
   const saved=await page.evaluate(()=>window.aquariumDiagnostics.state);
+  const pausedToys=await page.evaluate(()=>window.aquariumDiagnostics.screenToys);
   assert.equal(saved.speed,3600); assert.equal(saved.paused,true);
   await page.setViewportSize({width:1040,height:760});
   await page.reload();
@@ -132,6 +155,13 @@ try{
   const restored=await page.evaluate(()=>window.aquariumDiagnostics.state);
   assert.equal(restored.animals.length,13); assert.equal(restored.plants.length,10);
   assert.deepEqual(restored.hardscape,saved.hardscape);
+  assert.deepEqual(restored.toys,saved.toys);
+  const reloadedToys=await page.evaluate(()=>window.aquariumDiagnostics.screenToys);
+  for (const toy of pausedToys) {
+    const position = reloadedToys.find(t => t.id === toy.id).world;
+    assert.ok(Math.hypot(position.x-toy.world.x, position.y-toy.world.y, position.z-toy.world.z) < 0.04,
+      'paused floating toys return to their saved positions');
+  }
   assert.equal(restored.speed,3600); assert.equal(restored.paused,true);
   assert.equal(restored.equipment.aerator,false);
   assert.equal(restored.animals[0].id,saved.animals[0].id);
@@ -145,7 +175,7 @@ try{
   await page.screenshot({path:'artifacts/aquarium-controls.png',omitBackground:true});
   await verifyUpdateBadge();
   assert.deepEqual(errors,[],'no JavaScript or shader errors');
-  const report={passed:true,checks:['transparent background','WebGL renderer','hidden controls','feeding','add fish and plants','edit individual plants and hardscape','individual inspection','water change','equipment controls','compact tabs','journal and settings navigation','update badge and release notification','clock and pause','persistence'],stats:await page.evaluate(()=>window.aquariumDiagnostics.stats),errors};
+  const report={passed:true,checks:['transparent background','WebGL renderer','hidden controls','feeding','add fish and plants','edit individual plants and hardscape','place, drift and restore floating toys','individual inspection','water change','equipment controls','compact tabs','journal and settings navigation','update badge and release notification','clock and pause','persistence'],stats:await page.evaluate(()=>window.aquariumDiagnostics.stats),errors};
   await writeFile('artifacts/smoke-browser.json',JSON.stringify(report,null,2));
   console.log(JSON.stringify(report,null,2));
 }finally{await browser.close();}

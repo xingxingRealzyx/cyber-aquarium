@@ -1,7 +1,27 @@
 import * as THREE from 'three';
 
-// Height in tank units and its two spatial derivatives. Both the visible surface
-// and the rays passing through it use this wave field.
+// Wave vector (x, z), amplitude in tank units, angular frequency and phase.
+// Toys and both GPU passes sample this same surface and its derivatives.
+const ripples = [
+  [4.8, 2.1, .008, .92, .41],
+  [-2.7, 6.5, .0065, 1.12, 2.16],
+  [7.2, -3.0, .0045, -.88, 1.34],
+  [5.0, 8.6, .0025, 1.34, .09],
+  [-8.2, -4.2, .0024, 1.02, 3.2],
+];
+
+export function sampleWaterSurface(x, z, time, field) {
+  field.set(0, 0, 0);
+  for (const [kx, kz, amplitude, speed, phase] of ripples) {
+    const angle = x * kx + z * kz + time * speed + phase;
+    const slope = amplitude * Math.cos(angle);
+    field.x += amplitude * Math.sin(angle);
+    field.y += kx * slope;
+    field.z += kz * slope;
+  }
+  return field;
+}
+
 const waves = /* glsl */ `
   void ripple(inout vec3 field, vec2 p, float t, vec2 k, float amplitude, float speed, float phase) {
     float a = dot(p,k) + t*speed + phase;
@@ -9,11 +29,8 @@ const waves = /* glsl */ `
   }
   vec3 waterField(vec2 p, float t) {
     vec3 field = vec3(0.0);
-    ripple(field,p,t,vec2(4.8,2.1),.008,.92,.41);
-    ripple(field,p,t,vec2(-2.7,6.5),.0065,1.12,2.16);
-    ripple(field,p,t,vec2(7.2,-3.0),.0045,-.88,1.34);
-    ripple(field,p,t,vec2(5.0,8.6),.0025,1.34,.09);
-    ripple(field,p,t,vec2(-8.2,-4.2),.0024,1.02,3.2);
+    ${ripples.map(([kx, kz, a, speed, phase]) =>
+      `ripple(field,p,t,vec2(${kx.toFixed(1)},${kz.toFixed(1)}),${a},${speed},${phase});`).join('\n    ')}
     return field;
   }
 `;

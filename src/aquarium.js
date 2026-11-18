@@ -10,6 +10,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createAquaticPlants } from './aquatic-plants.js';
 import { createBroodDisplay } from './brood-model.js';
+import { createToyModel } from './toy-model.js';
+import { poseToy } from './toy-motion.js';
 
 // All geometry is local. The framebuffer remains transparent outside the tank.
 const WIDTH = 8, HEIGHT = 4.4, DEPTH = 4, WATER_LEVEL = 4.14;
@@ -132,7 +134,8 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   room.dispose();
   pmrem.dispose();
   const time={value:0};
-  const waterLight=createWaterLight(renderer,time);
+  const waterClock={value:0};
+  const waterLight=createWaterLight(renderer,waterClock);
   const daylight={environment:.36,ambient:1.2,key:6.1,fill:.88};
   scene.environmentIntensity=daylight.environment;
   const ambientLight=new THREE.HemisphereLight('#e3f0e9','#797563',daylight.ambient);
@@ -165,7 +168,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     [new THREE.PlaneGeometry(DEPTH,HEIGHT),[WIDTH/2,HEIGHT/2,0],[0,Math.PI/2,0]],
   ];
   panes.forEach(([g,p,r])=>{const pane=mesh(g,glassMat,tank,p);pane.rotation.set(...r);pane.renderOrder=20;});
-  const waterUniforms={aquaTime:time, clarity:{value:1}, lightOn:{value:1}};
+  const waterUniforms={aquaTime:waterClock, clarity:{value:1}, lightOn:{value:1}};
   const surfaceMat=waterSurfaceMaterial(waterUniforms);
   const surface=mesh(new THREE.PlaneGeometry(7.96,3.96,55,28),surfaceMat,tank,[0,WATER_LEVEL,0]);
   surface.rotation.x=-Math.PI/2;surface.renderOrder=15;
@@ -178,6 +181,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
 
   const hardscape = createHardscape(sceneryLoader);
   tank.add(hardscape.group);
+  const toys = new Map();
 
   const filterGroup=new THREE.Group();tank.add(filterGroup);
   const filterMat=material('#273731',{roughness:.65});
@@ -272,6 +276,15 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
       return { id, count: mesh.count, ...screenPoint(projected, rect) };
     });
   }
+  function getToyScreenPositions(){
+    const rect=renderer.domElement.getBoundingClientRect();
+    camera.updateMatrixWorld();
+    return [...toys].map(([id,model])=>{
+      model.getWorldPosition(projected);
+      const {x,y,z}=projected;
+      return {id,kind:model.userData.toyKind,world:{x,y,z},...screenPoint(projected,rect)};
+    });
+  }
   function pickAnimal(clientX,clientY,cycleFrom=null){
     setRay(clientX,clientY);fauna.updateMatrixWorld(true);
     const hits=raycaster.intersectObjects([...animals.values()],true);
@@ -330,6 +343,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   function update(state,deltaSeconds,elapsedSeconds){
     const t=Number.isFinite(elapsedSeconds)?elapsedSeconds:time.value+Math.max(0,deltaSeconds);
     time.value=t;
+    waterClock.value=state.currentSeconds ?? t;
     const light=state.equipment?.light!==false;
     if(light!==lastLight){
       fillLight.intensity=light?daylight.fill:.13;
@@ -346,6 +360,20 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     waterTintMat.color.set(clarity>.5?'#6ca781':'#8c9958');
     particleMat.opacity=.15+(1-clarity)*.36;
     hardscape.update(state.hardscape || []);
+    const placedToys=state.toys || [];
+    for(const [id,model] of toys){
+      if(placedToys.some(toy=>toy.id===id))continue;
+      tank.remove(model);disposeObject(model);toys.delete(id);
+    }
+    for(const toy of placedToys){
+      let model=toys.get(toy.id);
+      if(!model){
+        model=createToyModel(toy.kind);
+        model.userData.toyKind=toy.kind;
+        tank.add(model);toys.set(toy.id,model);
+      }
+      poseToy(model,toy,waterClock.value,WATER_LEVEL,hardscape.driftFloor);
+    }
     const signature=(state.plants||[]).map(p=>`${p.id}:${p.species}:${p.slot}:${Math.round((p.biomass??1)*4)}`).join('|');
     if(signature!==plantsSignature){plantsSignature=signature;rebuildPlants(state.plants||[]);}
     const currentIds=new Set();
@@ -455,5 +483,5 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     broodDisplay.dispose();
     disposeObject(scene);waterLight.dispose();keyLight.shadow.dispose();environment.dispose();renderer.dispose();renderer.domElement.remove();
   }
-  return {update,resize,resetView,setDesktopLayout:desktopView.setLayout,setAutoRotate:(value)=>{controls.autoRotate=Boolean(value);},setQuality,dispose,renderer,camera,controls,hitTest,setSelectedAnimal,getAnimalScreenPositions,getBroodScreenPositions};
+  return {update,resize,resetView,setDesktopLayout:desktopView.setLayout,setAutoRotate:(value)=>{controls.autoRotate=Boolean(value);},setQuality,dispose,renderer,camera,controls,hitTest,setSelectedAnimal,getAnimalScreenPositions,getBroodScreenPositions,getToyScreenPositions};
 }

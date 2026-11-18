@@ -4,6 +4,7 @@ import { advanceBehavior } from '../src/behavior.js';
 import {
   createInitialState, advanceSimulation, feed, changeWater, getAssessment, restoreState, ammoniaFraction,
   addAnimal, removeAnimal, removeDead, addPlant, removePlant, addHardscape, removeHardscape, MAX_HARDSCAPE,
+  addToy, removeToy, MAX_TOYS,
 } from '../src/simulation.js';
 
 const totalNitrogen = s => s.water.ammonia + s.water.nitrite + s.water.nitrate;
@@ -46,6 +47,43 @@ test('unknown, duplicate and out-of-range scenery entries are sanitized on load'
   assert.equal(removeHardscape(state, 'missing').ok, false);
   while (state.hardscape.length < MAX_HARDSCAPE) assert.equal(addHardscape(state, 'stone').ok, true);
   assert.equal(addHardscape(state, 'wood').ok, false);
+});
+
+test('floating toys keep their individual slots and current phase across saves', () => {
+  const state = restoreState({ version: 1, behaviorSeconds: 72.5 });
+  assert.deepEqual(state.toys, []);
+  assert.equal(state.currentSeconds, 72.5);
+  const first = addToy(state, 'duck').item;
+  const second = addToy(state, 'duck').item;
+  const diver = addToy(state, 'diver').item;
+  assert.deepEqual([first.slot, second.slot, diver.slot], [0, 1, 0]);
+  assert.equal(removeToy(state, first.id).ok, true);
+  const replacement = addToy(state, 'duck').item;
+  assert.equal(replacement.slot, 0);
+  assert.notEqual(replacement.id, first.id);
+  state.currentSeconds = 36.75;
+  const restored = restoreState(JSON.stringify(state));
+  assert.deepEqual(restored.toys, [second, diver, replacement]);
+  assert.equal(restored.currentSeconds, 36.75);
+  for (const item of [...restored.toys]) assert.equal(removeToy(restored, item.id).ok, true);
+  assert.deepEqual(restoreState(JSON.stringify(restored)).toys, []);
+});
+
+test('invalid or excess toys cannot exceed capacity or reuse an occupied slot', () => {
+  const toys = [
+    { kind: ['duck'] }, { kind: '__proto__' }, null,
+    { kind: 'diver', id: 'suit', slot: 1 }, { kind: 'diver', id: 'suit', slot: 1 },
+    ...Array.from({ length: MAX_TOYS }, () => ({ kind: 'duck', slot: -1 })),
+  ];
+  const state = restoreState({ version: 1, toys });
+  assert.equal(state.toys.length, MAX_TOYS);
+  assert.equal(new Set(state.toys.map(toy => toy.id)).size, MAX_TOYS);
+  assert.equal(new Set(state.toys.map(toy => `${toy.kind}/${toy.slot}`)).size, MAX_TOYS);
+  assert.equal(addToy(state, 'duck').ok, false);
+  assert.equal(removeToy(state, 'missing').ok, false);
+  assert.equal(removeToy(state, 'suit').ok, true);
+  assert.equal(addToy(state, 'stone').ok, false);
+  assert.equal(addToy(state, 'diver').item.slot, 1);
 });
 
 test('removing an individual preserves its tankmates and survives a reload', () => {

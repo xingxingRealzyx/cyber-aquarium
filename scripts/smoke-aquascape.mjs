@@ -62,10 +62,14 @@ try {
       const {plant}=sim.addPlant(state,'moss');
       const {item:stone}=sim.addHardscape(state,'stone');
       const {item:wood}=sim.addHardscape(state,'wood');
+      const {item:duck}=sim.addToy(state,'duck');
+      const {item:diver}=sim.addToy(state,'diver');
       await renderAndWait();
       sim.removePlant(state,plant.id);
       sim.removeHardscape(state,stone.id);
       sim.removeHardscape(state,wood.id);
+      sim.removeToy(state,duck.id);
+      sim.removeToy(state,diver.id);
       await renderAndWait();
     }
     state.equipment.light=false;

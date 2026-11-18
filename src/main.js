@@ -6,11 +6,12 @@ import { REPRODUCTION } from './reproduction.js';
 import {
   createInitialState, restoreState, advanceSimulation, addAnimal, addPlant, feed,
   changeWater, removeAnimal, removeDead, getAssessment, SPECIES,
-  addHardscape, removeHardscape, removePlant, animalLifeStage, relativeAdultSize, availableAnimalSlots,
+  addHardscape, removeHardscape, removePlant, addToy, removeToy, animalLifeStage, relativeAdultSize, availableAnimalSlots,
   corpseDecay, INFECTIONS, careForFish,
 } from './simulation.js';
 
 const SAVE_KEY = 'chengjing.aquarium.v1';
+const sceneryActions = { addPlant, removePlant, addHardscape, removeHardscape, addToy, removeToy };
 const desktop = window.aquariumDesktop;
 const trayLocation = desktop?.platform === 'win32' ? '系统托盘' : '菜单栏';
 const $ = (s) => document.querySelector(s);
@@ -455,6 +456,7 @@ function perform(action) {
 }
 app.addEventListener('click', e=>{
   const b=e.target.closest('button'); if(!b) return;
+  const sceneryAction = Object.keys(b.dataset).find(key => Object.hasOwn(sceneryActions, key));
   if(b.dataset.action) perform(b.dataset.action);
   else if(b.dataset.tab) openPanel(b.dataset.tab);
   else if(b.dataset.equipment) { const key=b.dataset.equipment; state.equipment[key]=!state.equipment[key]; updatePanel(); persist(); }
@@ -464,10 +466,8 @@ app.addEventListener('click', e=>{
     notify(result.message); updatePanel(); persist();
   }
   else if(b.dataset.showKind) { expandedKind = expandedKind === b.dataset.showKind ? null : b.dataset.showKind; updatePanel(); }
-  else if(b.dataset.addPlant || b.dataset.removePlant || b.dataset.addHardscape || b.dataset.removeHardscape) {
-    const {addPlant: plant, removePlant: plantId, addHardscape: kind, removeHardscape: itemId} = b.dataset;
-    const result = plant ? addPlant(state, plant) : plantId ? removePlant(state, plantId)
-      : kind ? addHardscape(state, kind) : removeHardscape(state, itemId);
+  else if(sceneryAction) {
+    const result = sceneryActions[sceneryAction](state, b.dataset[sceneryAction]);
     notify(result.message);
     if(result.ok) persist();
     updatePanel();
@@ -621,4 +621,8 @@ try {
 setTimeout(()=>$('#hint').classList.add('dismissed'),7500);
 if(saveError)notify('旧存档无法读取，已建立一只新鱼缸');
 // Read-only diagnostic snapshot is useful when verifying the native GPU renderer.
-Object.defineProperty(window,'aquariumDiagnostics',{get:()=>({state:JSON.parse(JSON.stringify(state)),stats:{...stats},renderer:renderer?.renderer.info.render,panelOpen,selectedId,screenAnimals:renderer?.getAnimalScreenPositions?.()||[],screenBroods:renderer?.getBroodScreenPositions?.()||[]})});
+Object.defineProperty(window,'aquariumDiagnostics',{get:()=>({
+  state:JSON.parse(JSON.stringify(state)), stats:{...stats}, renderer:renderer?.renderer.info.render, panelOpen, selectedId,
+  screenAnimals:renderer?.getAnimalScreenPositions?.()||[], screenBroods:renderer?.getBroodScreenPositions?.()||[],
+  screenToys:renderer?.getToyScreenPositions?.()||[],
+})});

@@ -1,4 +1,4 @@
-import { PLANTS, HARDSCAPE, MAX_PLANTS, MAX_HARDSCAPE } from './simulation.js';
+import { PLANTS, HARDSCAPE, TOYS, MAX_PLANTS, MAX_HARDSCAPE, MAX_TOYS } from './simulation.js';
 
 export function sceneryPanel(state, expandedKind, escape) {
   function section(title, items, catalog, category, limit) {
@@ -26,5 +26,7 @@ export function sceneryPanel(state, expandedKind, escape) {
   }
   return section('水草', state.plants, PLANTS, 'plant', MAX_PLANTS)
     + section('石与沉木', state.hardscape, HARDSCAPE, 'hardscape', MAX_HARDSCAPE)
-    + '<p class="micro-note">点品种名称可按编号移出。水草在光照下吸收硝酸盐并产氧。</p>';
+    + '<p class="micro-note">点品种名称可按编号移出。水草在光照下吸收硝酸盐并产氧。</p>'
+    + section('漂浮玩具', state.toys, TOYS, 'toy', MAX_TOYS)
+    + '<p class="micro-note">小黄鸭浮在水面。潜水员具有中性浮力，随水流上下漂移。</p>';
 }

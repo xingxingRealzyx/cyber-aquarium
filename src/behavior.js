@@ -152,6 +152,8 @@ export function advanceBehavior(state,realDtSeconds) {
   if(state.paused||!Number.isFinite(realDtSeconds)||realDtSeconds<=0)return state;
   state.foodPellets ||= [];
   let remaining=Math.min(realDtSeconds,30);
+  const flow = (state.equipment?.filter !== false ? .78 : 0) + (state.equipment?.aerator !== false ? .22 : 0);
+  state.currentSeconds = (state.currentSeconds ?? state.behaviorSeconds ?? 0) + remaining * flow;
   while(remaining>1e-9){const dt=Math.min(1/30,remaining);step(state,dt);remaining-=dt;}
   return state;
 }
