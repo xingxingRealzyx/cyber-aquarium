@@ -140,7 +140,7 @@ test('feeding a full legacy bed preserves every settled grain and adds fresh sur
   nearly(state.food, .48);
 });
 
-test('rapid feeding preserves underwater grains through congestion, save and eventual settling', () => {
+test('repeated feeds sink through a crowded water column before and after reloading', () => {
   const state = createInitialState();
   state.animals = [];
   for (let i = 0; i < 5; i++) feed(state);
@@ -157,15 +157,32 @@ test('rapid feeding preserves underwater grains through congestion, save and eve
   assert.ok(state.foodPellets.some(p => p.y > 3.8));
   assert.ok(state.foodPellets.length <= MAX_FOOD_PELLETS);
   nearly(state.food, 120.8);
-  const restored = restoreState(JSON.stringify(state));
-  assert.deepEqual(restored.foodPellets, state.foodPellets);
-  nearly(restored.food, state.food);
+  const highestGrain = tank => Math.max(...tank.foodPellets.map(p => p.y));
+  function checkFall(tank, seconds) {
+    for (let second = 0; second < seconds; second++) {
+      const before = highestGrain(tank);
+      run(tank, 1);
+      assert.ok(highestGrain(tank) < before - .08, 'fresh food must keep descending each second while crowded');
+    }
+  }
+  checkFall(state, 3);
 
-  run(restored, 3);
-  const lowerIds = new Set(submerged.map(p => p.id));
-  const waiting = restored.foodPellets.filter(p => !lowerIds.has(p.id));
-  assert.ok(waiting.length > 0 && waiting.every(p => p.y > 3.8), 'fresh food waits at the surface while the water column is full');
-  run(restored, 97);
+  const restored = restoreState(JSON.stringify(state));
+  assert.deepEqual(restored.foodPellets, state.foodPellets, 'all grains in transit survive a save and reload');
+  nearly(restored.food, state.food);
+  checkFall(restored, 2);
+
+  let expectedMass = 120.8;
+  for (let wave = 0; wave < 5; wave++) {
+    for (let i = 0; i < 5; i++) feed(restored);
+    expectedMass += .4;
+    assert.ok(highestGrain(restored) > 3.8, 'new food enters at the surface even at capacity');
+    assert.ok(restored.foodPellets.length <= MAX_FOOD_PELLETS);
+    checkFall(restored, 3);
+    nearly(sumFood(restored), expectedMass);
+    nearly(restored.food, expectedMass);
+  }
+  run(restored, 45);
   assert.ok(restored.foodPellets.every(p => Math.abs(p.y - substrateHeight(p.x,p.z) - .04) < .002));
   const settled = new Map(restored.foodPellets.map(p => [p.id,p]));
   for (const p of bed) {
@@ -174,8 +191,27 @@ test('rapid feeding preserves underwater grains through congestion, save and eve
     assert.deepEqual([grain.x,grain.y,grain.z], [p.x,p.y,p.z]);
     assert.ok(grain.mass >= p.mass);
   }
-  nearly(sumFood(restored), 120.8);
-  nearly(restored.food, 120.8);
+  nearly(sumFood(restored), expectedMass);
+  nearly(restored.food, expectedMass);
+});
+
+test('loading a v0.6.2 save releases grains stranded at the surface', () => {
+  // The first 160 occupied the sinking slots. Every later grain was held at exactly 3.85.
+  const foodPellets = Array.from({ length: 320 }, (_, i) => ({
+    id: `legacy-grain-${i}`, x: (i % 16 - 8) / 8, z: Math.floor(i % 160 / 16) / 10,
+    y: i < 160 ? 2.5 : 3.85, seed: i / 320, mass: .0025, ageSeconds: 12,
+  }));
+  const saved = JSON.stringify({ version: 1, animals: [], foodPellets });
+  const restored = restoreState(saved);
+  run(restored, 1);
+  const grains = new Map(restored.foodPellets.map(p => [p.id, p]));
+  for (const p of foodPellets) {
+    const moved = grains.get(p.id);
+    assert.ok(moved, `missing legacy grain ${p.id}`);
+    assert.ok(moved.y < p.y - .08, `${p.id} should start sinking on reload`);
+    nearly(moved.mass, p.mass);
+  }
+  nearly(restored.food, .8);
 });
 
 test('old saves preserve IDs and health/hunger while migrating bulk leftovers',()=>{

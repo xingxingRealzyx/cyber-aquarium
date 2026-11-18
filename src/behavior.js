@@ -1,5 +1,5 @@
 import {
-  consumePellet, FOOD_SURFACE_Y, nearestPellet, pelletLayer, PELLETS_PER_LAYER,
+  consumePellet, isSettledPellet, MAX_BED_PELLETS, nearestPellet,
   reconcileFood, SPECIES, substrateHeight,
 } from './simulation.js';
 
@@ -43,33 +43,19 @@ function chooseFood(state,animal,reserved) {
 }
 
 function sinkFood(state, dt) {
-  const crowded = state.foodPellets.length > PELLETS_PER_LAYER;
-  const bed = [];
-  let sinking = 0, merged = false;
-  if (crowded) {
-    for (const pellet of state.foodPellets) {
-      const layer = pelletLayer(pellet);
-      if (layer === 'bed') bed.push(pellet);
-      if (layer === 'sinking') sinking++;
-    }
-  }
+  const bed = state.foodPellets.length > MAX_BED_PELLETS ? state.foodPellets.filter(isSettledPellet) : null;
+  let merged = false;
   for(const p of state.foodPellets) {
     p.ageSeconds+=dt;
-    if (pelletLayer(p) === 'bed') continue;
+    if (isSettledPellet(p)) continue;
     p.x=clamp(p.x+Math.sin(p.ageSeconds*.7+p.seed*9)*.012*dt,-3.6,3.6);
     p.z=clamp(p.z+Math.cos(p.ageSeconds*.5+p.seed*7)*.008*dt,-1.6,1.6);
     const floor = substrateHeight(p.x,p.z) + .04;
-    let y = p.y - (.095+random(p.seed+8)*.03)*dt;
-    if (crowded && p.y >= FOOD_SURFACE_Y && y < FOOD_SURFACE_Y) {
-      // Let the existing food continue sinking. Excess feed floats until there is room.
-      if (sinking >= PELLETS_PER_LAYER) y = FOOD_SURFACE_Y;
-      else sinking++;
-    }
+    const y = p.y - (.095+random(p.seed+8)*.03)*dt;
     if (y > floor + .001) { p.y = y; continue; }
     p.y = floor;
-    if (crowded) {
-      sinking--;
-      if (bed.length < PELLETS_PER_LAYER) bed.push(p);
+    if (bed) {
+      if (bed.length < MAX_BED_PELLETS) bed.push(p);
       else {
         nearestPellet(bed, p.x, p.y, p.z).mass += p.mass;
         p.mass = 0;

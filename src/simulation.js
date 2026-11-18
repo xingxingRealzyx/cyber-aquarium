@@ -35,10 +35,12 @@ export const HARDSCAPE = Object.freeze({
 const MAX_ANIMALS = 80;
 export const MAX_PLANTS = 40;
 export const MAX_HARDSCAPE = 40;
-// Each depth range can hold a full v0.6.1 save without displacing any old feed.
-export const PELLETS_PER_LAYER = 160;
-export const MAX_FOOD_PELLETS = 3 * PELLETS_PER_LAYER;
-export const FOOD_SURFACE_Y = 3.85;
+export const MAX_BED_PELLETS = 160;
+const MAX_SURFACE_PELLETS = 160;
+const MAX_FALLING_PELLETS = 320;
+const CROWDED_FEED_PARTICLES = 8;
+export const MAX_FOOD_PELLETS = MAX_BED_PELLETS + MAX_FALLING_PELLETS;
+const FOOD_SURFACE_Y = 3.85;
 const STEP = 1 / 12;
 let sequence = 0;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -76,9 +78,8 @@ export function reconcileFood(state) {
   state.food = state.foodPellets.reduce((sum,p) => sum + p.mass, 0);
 }
 
-export function pelletLayer(p) {
-  if (p.y >= FOOD_SURFACE_Y) return 'surface';
-  return p.y <= substrateHeight(p.x, p.z) + .041 ? 'bed' : 'sinking';
+export function isSettledPellet(p) {
+  return p.y <= substrateHeight(p.x, p.z) + .041;
 }
 
 export function nearestPellet(pellets, x, y, z) {
@@ -90,20 +91,49 @@ export function nearestPellet(pellets, x, y, z) {
   return nearest;
 }
 
+// At full capacity, combine the closest suspended grains so the next dose can
+// enter at the surface. Keep the heavier grain's trajectory and the entire bed.
+function combineClosestFallingPair(falling) {
+  let shortestDistance = Infinity;
+  let first = 0, second = 1;
+  for (let i = 0; i < falling.length; i++) {
+    const a = falling[i];
+    for (let j = i + 1; j < falling.length; j++) {
+      const b = falling[j];
+      const distance = (a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2;
+      if (distance < shortestDistance) {
+        shortestDistance = distance;
+        first = i;
+        second = j;
+      }
+    }
+  }
+  if (falling[first].mass < falling[second].mass) [first, second] = [second, first];
+  falling[first].mass += falling[second].mass;
+  falling[second].mass = 0;
+  falling.splice(second, 1);
+}
+
 function addPellets(state, amount, seed = Math.random(), settled = false) {
   if (!(amount > 0)) return;
   state.foodPellets ||= [];
   const count = Math.min(40, Math.max(12, Math.ceil(amount / .0025)));
-  const layer = settled ? 'bed' : 'surface';
-  const recipients = state.foodPellets.filter(p => pelletLayer(p) === layer);
+  const existing = state.foodPellets.filter(p => isSettledPellet(p) === settled);
+  const recipients = settled ? existing : existing.filter(p => p.y >= FOOD_SURFACE_Y);
+  if (!settled && recipients.length === 0 && existing.length >= MAX_FALLING_PELLETS) {
+    const target = MAX_FALLING_PELLETS - CROWDED_FEED_PARTICLES;
+    while (existing.length > target) combineClosestFallingPair(existing);
+  }
+  const slots = settled
+    ? MAX_BED_PELLETS - existing.length
+    : Math.min(MAX_FALLING_PELLETS - existing.length, MAX_SURFACE_PELLETS - recipients.length);
   for (let i = 0; i < count; i++) {
     const pelletSeed = random(seed + i * 1.37);
     const x = (random(pelletSeed + 41) - .5) * 2.4, z = .4 + (random(pelletSeed + 42) - .5) * 1.1;
     const y = settled ? substrateHeight(x,z) + .04 : 3.88 + random(pelletSeed + 43) * .1;
-    if (recipients.length >= PELLETS_PER_LAYER) {
+    if (i >= slots) {
       const nearby = nearestPellet(recipients, x, y, z);
       nearby.mass += amount / count;
-      if (!settled) nearby.ageSeconds = 0;
     } else {
       const pellet = { id: key('pellet'), x, y, z, mass: amount / count, ageSeconds: settled ? 40 : 0, seed: pelletSeed };
       recipients.push(pellet);
@@ -497,13 +527,14 @@ export function restoreState(raw) {
   const pelletIds = new Set();
   base.foodPellets = [];
   if (Array.isArray(data.foodPellets)) {
-    const layers = { surface: [], sinking: [], bed: [] };
+    const bed = [], falling = [];
     for (const p of data.foodPellets) {
       if (!p || !Number.isFinite(p.mass) || p.mass <= 0) continue;
       const id = typeof p.id === 'string' && p.id.length < 100 && !pelletIds.has(p.id) ? p.id : key('pellet');
       const pellet={id,x:numeric(p.x,0,-3.65,3.65),y:numeric(p.y,3.9,.15,4.05),z:numeric(p.z,.4,-1.65,1.65),mass:numeric(p.mass,0,0,Number.MAX_SAFE_INTEGER),ageSeconds:numeric(p.ageSeconds,0,0,1e8),seed:numeric(p.seed,seedFromId(id),0,1)};
-      const layer = layers[pelletLayer(pellet)];
-      if (layer.length < PELLETS_PER_LAYER) {
+      const settled = isSettledPellet(pellet);
+      const layer = settled ? bed : falling;
+      if (layer.length < (settled ? MAX_BED_PELLETS : MAX_FALLING_PELLETS)) {
         layer.push(pellet);
         base.foodPellets.push(pellet);
         pelletIds.add(id);

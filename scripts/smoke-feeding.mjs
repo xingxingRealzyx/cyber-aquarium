@@ -165,9 +165,15 @@ try {
     for (let i = 0; i < 5; i++) feed(tank);
     advanceBehavior(tank, 30);
     advanceBehavior(tank, 15);
+    // Another 160 pellets are still in midwater when the next burst enters.
+    for (let i = 0; i < 5; i++) feed(tank);
+    advanceBehavior(tank, 8);
     tank.paused = true;
     return tank;
   });
+  const bedGrains = bottomFixture.foodPellets.filter(p => p.y < 1);
+  assert.equal(bedGrains.length, 160);
+  assert.equal(bottomFixture.foodPellets.filter(p => p.y > 2 && p.y < 3.5).length, 160);
   await page.addInitScript(({ saveKey, bottomFixture }) => {
     if (!sessionStorage.getItem('smoke-bottom-seeded')) {
       localStorage.setItem(saveKey, JSON.stringify(bottomFixture));
@@ -182,7 +188,7 @@ try {
   function verifyBottomFeed(tank) {
     const byId = new Map(tank.foodPellets.map(p => [p.id, p]));
     for (const old of bottomFixture.foodPellets) {
-      assert.deepEqual(byId.get(old.id), old, 'fresh feeds leave settled food in place');
+      assert.deepEqual(byId.get(old.id), old, 'fresh feeds leave the existing bed and midwater grains in place while paused');
     }
     assert.ok(tank.foodPellets.some(p => p.y > 3.8), 'fresh food enters at the surface');
     assert.ok(Math.abs(tank.food - bottomFixture.food - .08 * 12) < 1e-8, 'all repeated feeds are accounted for');
@@ -191,10 +197,42 @@ try {
   await page.reload();
   await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
   verifyBottomFeed((await snapshot()).state);
+
+  await page.keyboard.press('Space');
+  await page.waitForFunction(() => !window.aquariumDiagnostics.state.paused);
+  await page.mouse.move(500, 400);
+  for (let i = 0; i < 4; i++) await page.getByRole('button', { name: '投喂', exact: true }).click();
+
+  const existingIds = new Set(bottomFixture.foodPellets.map(p => p.id));
+  const start = (await snapshot()).state;
+  assert.ok(start.food > afterBurst.food + .31, 'the four live clicks add four portions, allowing for natural decay');
+  const incoming = start.foodPellets.filter(p => !existingIds.has(p.id) && p.y > 3.5);
+  assert.ok(incoming.length > 0, 'repeated live clicks leave recently released food visible');
+  const heights = new Map(incoming.map(p => [p.id, p.y]));
+  const descent = [];
+  let previousTime = start.behaviorSeconds;
+  for (let interval = 0; interval < 2; interval++) {
+    await page.waitForFunction(time => window.aquariumDiagnostics.state.behaviorSeconds >= time, previousTime + 2);
+    const state = (await snapshot()).state;
+    const elapsed = state.behaviorSeconds - previousTime;
+    const tracked = state.foodPellets.filter(p => heights.has(p.id));
+    assert.ok(tracked.length > 0, 'newly fed grains remain visible in the crowded water column');
+    for (const p of tracked) {
+      assert.ok(heights.get(p.id) - p.y > elapsed * .08, 'each tracked grain must descend between samples even with a full midwater layer');
+      heights.set(p.id, p.y);
+    }
+    for (const old of bedGrains) {
+      const bed = state.foodPellets.find(p => p.id === old.id);
+      assert.deepEqual(bed && [bed.x, bed.y, bed.z], [old.x, old.y, old.z], 'the original bed survives live repeated feeding');
+    }
+    descent.push({ seconds: state.behaviorSeconds - start.behaviorSeconds, tracked: tracked.length, highest: Math.max(...tracked.map(p => p.y)) });
+    previousTime = state.behaviorSeconds;
+  }
   assert.deepEqual(errors, [], 'no JavaScript, resource or shader errors');
   const report = {
     passed: true,
-    checks: ['click a swimming fish', 'individual detailed parameters', 'visible food emitted by feed button', 'no remote hunger reduction', 'hungry fish visibly pursues food', 'contact precedes a bite', 'only eater receives nutrition', 'individuals and remaining food survive reload', 'settled pellets keep their IDs and positions after repeated feeds and reload'],
+    checks: ['click a swimming fish', 'individual detailed parameters', 'visible food emitted by feed button', 'no remote hunger reduction', 'hungry fish visibly pursues food', 'contact precedes a bite', 'only eater receives nutrition', 'individuals and remaining food survive reload', 'settled pellets keep their IDs and positions after repeated feeds and reload', 'newly fed grains descend continuously past a full midwater layer'],
+    descent,
     pursuitFrames: seeking.length,
     hungry: { hungerBefore: 85, hungerAfter: hungryAfterBite.hunger, bites: hungryAfterBite.bites, eatenGrams: hungryAfterBite.totalEatenGrams },
     satiated: { hunger: fullAfterBite.hunger, bites: fullAfterBite.bites || 0 },
