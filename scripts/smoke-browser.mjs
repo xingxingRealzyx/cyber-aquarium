@@ -108,6 +108,7 @@ try{
   assert.equal(await activeTab.getAttribute('data-tab'), 'settings');
   assert.equal(await page.locator('#update-dot').isVisible(), false);
   assert.equal(await page.locator('.update-control').count(), 0);
+  assert.equal(await page.locator('[data-action="quit"]').count(), 0);
   await page.setViewportSize({width:720,height:520});
   const tabs = page.locator('.tabs');
   assert.ok(await tabs.evaluate(nav => nav.scrollWidth <= nav.clientWidth), 'all tabs fit in compact mode');

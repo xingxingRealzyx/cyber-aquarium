@@ -41,10 +41,11 @@ function bounded(promise, ms, operation) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function closeAquarium(application) {
+async function closeAquarium(application, quitButton) {
   const pid = application.process().pid;
   console.log('Quitting current packaged aquarium', pid);
-  await bounded(application.evaluate(({ app }) => { setTimeout(() => app.quit(), 50); }), 15000, 'requesting app.quit()');
+  if (quitButton) await quitButton.click({ timeout: 15000 });
+  else await bounded(application.evaluate(({ app }) => { setTimeout(() => app.quit(), 50); }), 15000, 'requesting app.quit()');
   await waitFor(() => !alive(pid), 'packaged aquarium ' + pid + ' failed to quit', 45000);
   apps.delete(application);
 }
@@ -125,9 +126,11 @@ async function openTestWindow() {
 
 async function openAndStage(firstRun) {
   const { application, page } = await openTestWindow();
-  if (firstRun) await page.evaluate(() => localStorage.setItem('smoke-update-stock', 'keep-this-tank'));
-  else {
-    assert.equal(await page.evaluate(() => localStorage.getItem('smoke-update-stock')), 'keep-this-tank');
+  if (firstRun) {
+    await page.locator('canvas').click({ button: 'right' });
+    await page.getByRole('button', { name: '暂停模拟', exact: true }).click();
+  } else {
+    assert.equal(await page.evaluate(() => window.aquariumDiagnostics.state.paused), true, 'the saved tank should still be paused after reopening');
     await waitFor(async () => !await stat(rescue).catch(() => null), 'A regular launch did not finish cleaning the previous update', 15000);
   }
   const workDir = await mkdtemp(path.join(temp, 'download-'));
@@ -145,7 +148,7 @@ async function openAndStage(firstRun) {
   assert.equal(stages.length, 1);
   console.log('Update prepared:', stages[0]);
   await access(rescue);
-  return { application, stage: path.join(directory, stages[0]) };
+  return { application, page, stage: path.join(directory, stages[0]) };
 }
 
 async function verifyRelaunch(stage, expectRecovery = false) {
@@ -178,7 +181,7 @@ try {
   const original = await stat(exe, { bigint: true });
   const normal = await openAndStage(true);
   const recoveryScript = await readFile(rescue);
-  await closeAquarium(normal.application);
+  await closeAquarium(normal.application, normal.page.getByRole('button', { name: '退出鱼缸', exact: true }));
   await verifyRelaunch(normal.stage);
   assert.notEqual((await stat(exe, { bigint: true })).ino, original.ino, 'the installed executable was replaced');
   console.log('Verified staged installation, first-frame acknowledgement, restart and cleanup.');

@@ -66,7 +66,9 @@ app.innerHTML = `
       <button data-tab="settings">设置</button>
     </nav>
     <div id="panel-content" class="panel-content"></div>
-    <footer><span id="render-stat">WebGL 2</span><span>60 L · 淡水生态</span></footer>
+    <footer><span id="render-stat">WebGL 2</span><span>60 L · 淡水生态</span>
+      ${desktop?.quit ? '<button type="button" class="quit-btn" data-action="quit" title="保存进度并退出应用">退出鱼缸</button>' : ''}
+    </footer>
   </aside>
   <aside id="inspector" class="inspector interactive" aria-label="生物个体档案" hidden>
     <button class="icon-btn" data-action="deselect" aria-label="关闭生物信息">${icon('close')}</button>
@@ -416,6 +418,11 @@ function updateInspector() {
 }
 function perform(action) {
   $('#hint').classList.add('dismissed');
+  if(action==='quit') {
+    persist();
+    desktop?.quit();
+    return;
+  }
   if(action==='close') closePanel();
   else if(action==='water') openPanel('water');
   else if(action==='life') openPanel('life');
