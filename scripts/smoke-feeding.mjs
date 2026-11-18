@@ -133,12 +133,16 @@ try {
   assert.ok(firstBiteIndex > 0, 'the trace captures a bite after pursuit');
   assert.ok(trace[firstBiteIndex - 1].animals[0].nearest < 0.8, 'food intake follows close physical contact');
 
-  // beforeunload performs the normal save, then startup restores that same tank.
+  // Take both snapshots at the same simulation time. Living fish grow between frames.
+  await page.getByRole('button', { name: '鱼缸设置', exact: true }).click();
+  await page.getByRole('button', { name: '暂停模拟', exact: true }).click();
+  await page.waitForFunction(() => window.aquariumDiagnostics.state.paused);
   const saved = await snapshot();
   assert.ok(saved.state.foodPellets.length > 0, 'remaining food is available for the save regression');
   await page.reload();
   await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
   const restored = await snapshot();
+  assert.equal(restored.state.paused, true);
   for (const id of [hungryId, fullId]) {
     const before = saved.state.animals.find(animal => animal.id === id);
     const after = restored.state.animals.find(animal => animal.id === id);
@@ -152,6 +156,8 @@ try {
   }
   assert.ok(restored.state.foodPellets.length > 0, 'remaining visible food survives reload');
   assert.ok(restored.state.food > 0, 'remaining food mass survives reload');
+  await page.keyboard.press('Space');
+  await page.waitForFunction(() => !window.aquariumDiagnostics.state.paused);
   await clickSwimmingFish(hungryId);
   assert.equal(await page.locator('#inspector').getAttribute('data-animal-id'), hungryId);
   await page.screenshot({ path: 'artifacts/feeding-individual.png', omitBackground: true });
