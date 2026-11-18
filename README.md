@@ -2,7 +2,11 @@
 
 一只放在桌面上的 60 L 淡水鱼缸。鱼群在沉木和水草间游动，饥饿的鱼会追逐刚投下的饲料。玻璃、缸底的石墨灰底托和水面一起由 Three.js 实时渲染，缸外透明处可以直接点击其他应用。
 
-![鱼缸实际渲染全景，可看到透明玻璃、底托、河砂、沉木、水草和游动的鱼群](docs/images/aquarium.webp)
+[![鱼缸缓慢旋转，鱼群绕过沉木，红衣猫头潜水员游上水面换气](docs/images/aquarium-orbit-preview.webp)](https://github.com/xingxingRealzyx/cyber-aquarium/releases/download/v0.10.0/aquarium-orbit.mp4)
+
+**那位穿红短袖、戴潜水面罩的银发猫猫头，就是作者本人的形象。** 写着写着，我把自己也养进鱼缸了 😂
+
+[下载完整环绕视频（27 秒 · 1080p MP4）](https://github.com/xingxingRealzyx/cyber-aquarium/releases/download/v0.10.0/aquarium-orbit.mp4) · [查看静态全景](docs/images/aquarium.webp)
 
 ## 下载桌面版
 
