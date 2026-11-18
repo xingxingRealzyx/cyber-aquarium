@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { createFishMaterials } from './fish-materials.js';
+import { createFishMaterials, applyDecayMaterial } from './fish-materials.js';
 
 // Dimensions in scene units, measured from the caudal peduncle to the snout.
 // The separate upper/lower profiles let a tetra, a gravid-looking guppy and a
@@ -223,23 +223,33 @@ export function createFishModel(species,seed) {
   const mouthGlow=new THREE.Mesh(new THREE.SphereGeometry(.021,10,8),new THREE.MeshBasicMaterial({color:'#ebcd88',transparent:true,opacity:0,depthWrite:false}));
   mouthGlow.position.copy(section(profile,1,0));mouthGlow.visible=false; mouthGlow.userData.pickIgnore=true;
   group.add(body,tail,fins,face,mouthGlow);
-  group.userData={kind:'fish',parts:[body,tail,fins],mouthGlow,swimPhase:seed*pi2};
+  group.userData={kind:'fish',parts:[body,tail,fins],face,mouthGlow,swimPhase:seed*pi2};
   return group;
 }
 
-export function animateFish(model,animal,dt,swimSpeed) {
+export function animateFish(model,animal,dt,swimSpeed,decay) {
   const data=model.userData;
   const alive=animal.alive!==false, seeking=animal.behavior==='seeking';
+  if (!alive) {
+    if (!data.decayUniform) {
+      data.decayUniform = {value: decay};
+      for (const part of [...data.parts, data.face]) applyDecayMaterial(part.material, data.decayUniform);
+      for (const part of data.parts) part.morphTargetInfluences.fill(0);
+    }
+    data.decayUniform.value = decay;
+    data.mouthGlow.visible = false;
+    return;
+  }
   const angel=animal.species==='angelfish';
   const rate=(angel?5.8:8.3)+Math.min(swimSpeed,2)*4+(seeking?2.5:0);
-  data.swimPhase=(data.swimPhase+Math.max(0,dt)*(alive?rate:.7))%pi2;
-  const amplitude=alive?(angel?.42:.57)+Math.min(swimSpeed,.95)*.34:.035;
+  data.swimPhase=(data.swimPhase+Math.max(0,dt)*rate)%pi2;
+  const amplitude=(angel?.42:.57)+Math.min(swimSpeed,.95)*.34;
   const sine=Math.sin(data.swimPhase)*amplitude, cosine=Math.cos(data.swimPhase)*amplitude;
   for(const part of data.parts) {
     part.morphTargetInfluences[0]=cosine;
     part.morphTargetInfluences[1]=-sine;
   }
-  const bite=alive?Math.min(1,(animal.biteFlash||0)/.45):0;
+  const bite=Math.min(1,(animal.biteFlash||0)/.45);
   data.mouthGlow.visible=bite>0;
   data.mouthGlow.material.opacity=.66*bite;
   data.mouthGlow.scale.setScalar(1+(1-bite)*1.4);

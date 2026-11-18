@@ -308,3 +308,30 @@ export function createFishMaterials(species, seed = 0) {
   }
   return materials;
 }
+
+// Colour the sampled skin and fins after their shared pigment maps are read.
+// This uniform belongs to a single carcass; living fish keep the original shader.
+export function applyDecayMaterial(material, decay) {
+  material.roughness = .96;
+  material.metalness = .015;
+  if (material.isMeshPhysicalMaterial) {
+    material.iridescence = 0;
+    material.clearcoat = 0;
+  }
+  material.onBeforeCompile = shader => {
+    shader.uniforms.corpseDecay = decay;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 skinPosition;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nskinPosition = position;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 skinPosition;\nuniform float corpseDecay;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float luminance = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+        float mottling = smoothstep(-0.7, 0.8, sin(skinPosition.x * 34.0 + sin(skinPosition.y * 47.0))
+          + 0.55 * sin(skinPosition.z * 51.0 - skinPosition.x * 23.0));
+        vec3 faded = mix(vec3(0.55, 0.57, 0.49), vec3(0.28, 0.24, 0.16), corpseDecay * mottling);
+        diffuseColor.rgb = mix(diffuseColor.rgb, faded * (0.30 + luminance), 0.18 + 0.78 * corpseDecay);
+      `);
+  };
+  material.needsUpdate = true;
+}

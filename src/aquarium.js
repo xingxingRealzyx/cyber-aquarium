@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createWaterLight, waterSurfaceMaterial } from './water-light.js';
 import { createDesktopView } from './desktop-view.js';
-import { MAX_FOOD_PELLETS, substrateHeight as sandHeight } from './simulation.js';
+import { corpseDecay, MAX_FOOD_PELLETS, substrateHeight as sandHeight } from './simulation.js';
 import { createSubstrate } from './substrate.js';
 import { createTankBase } from './tank-base.js';
 import { createHardscape } from './hardscape.js';
@@ -334,8 +334,10 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
       const p=animal.position;
       const hasPosition=p&&[p.x,p.y,p.z].every(Number.isFinite);
       const velocity=animal.velocity||{x:0,y:0,z:0};
-      const size=clamp(animal.size??1,.65,1.5);
-      model.scale.setScalar(size);
+      const fish = model.userData.kind === 'fish';
+      const decay = !alive && fish ? corpseDecay(animal) : 0;
+      const size = clamp(animal.size ?? 1, .6, 1.5);
+      model.scale.set(size, size * (1 - .13 * decay), size * (1 - .28 * decay));
       // State owns all locomotion and feeding; rendering never consumes food.
       if(hasPosition) model.position.set(p.x,p.y,p.z);
       else if(!model.userData.positionInitialized){
@@ -348,17 +350,24 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
       if(alive){
         const yaw=horizontal>.001?Math.atan2(-(velocity.z||0),velocity.x||0):(model.userData.headingYaw??0);
         model.userData.headingYaw=yaw;
-        const pitch=model.userData.kind==='fish'&&swimSpeed>.001?clamp(Math.atan2(velocity.y||0,horizontal),-.85,.85):0;
+        const pitch=fish&&swimSpeed>.001?clamp(Math.atan2(velocity.y||0,horizontal),-.85,.85):0;
         headingEuler.set(0,yaw,pitch,'YZX');targetQuaternion.setFromEuler(headingEuler);
-        if(!model.userData.orientationInitialized){model.quaternion.copy(targetQuaternion);model.userData.orientationInitialized=true;}
-        else model.quaternion.slerp(targetQuaternion,1-Math.exp(-Math.max(0,deltaSeconds)*9));
       }else{
-        const yaw=model.userData.headingYaw??0;
-        headingEuler.set(0,yaw,model.userData.kind==='fish'?Math.PI:Math.PI*.6,'YZX');
+        const yaw = animal.deathHeading ?? model.userData.headingYaw ?? 0;
+        const seconds = Math.max(0, state.behaviorSeconds - (animal.deathBehaviorSeconds ?? 0));
+        const side = seed < .5 ? -1 : 1;
+        // Roll about the fish's own long axis while retaining its last heading.
+        const roll = side * (fish ? Math.PI * .48 : .34) * (1 - Math.exp(-seconds * .7));
+        headingEuler.set(roll,yaw,0,'YZX');
         targetQuaternion.setFromEuler(headingEuler);
-        model.quaternion.slerp(targetQuaternion,1-Math.exp(-Math.max(0,deltaSeconds)*2));
       }
-      if (model.userData.kind === 'fish') animateFish(model,animal,deltaSeconds,swimSpeed);
+      if(!model.userData.orientationInitialized){
+        model.quaternion.copy(targetQuaternion);
+        model.userData.orientationInitialized=true;
+      }else if (!state.paused) {
+        model.quaternion.slerp(targetQuaternion,1-Math.exp(-Math.max(0,deltaSeconds)*9));
+      }
+      if (fish) animateFish(model,animal,state.paused ? 0 : deltaSeconds,swimSpeed,decay);
     }
     for(const [id,model] of animals)if(!currentIds.has(id)){fauna.remove(model);disposeObject(model);animals.delete(id);}
     for(let i=0;i<particleCount;i++){

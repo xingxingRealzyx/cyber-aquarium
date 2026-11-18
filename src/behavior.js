@@ -80,7 +80,9 @@ function step(state,dt) {
     const pos=a.position,vel=a.velocity;
     if(!a.alive) {
       a.behavior='dead';a.targetFoodId=null;
-      if(fish)pos.y=Math.min(4.0,pos.y+.10*dt);
+      // Floating fish rest on their side just beneath the waterline (4.14).
+      // Approach from either side so old saves above this depth resume smoothly.
+      if (fish) pos.y += clamp(4.0 - pos.y, -.10 * dt, .10 * dt);
       vel.x=vel.y=vel.z=0;
       continue;
     }

@@ -85,6 +85,8 @@ try {
   assert.ok(selected, 'a new three-dimensional fish can be picked and inspected');
   const inspector = page.locator('#inspector');
   await inspector.getByRole('heading', { name: selected.label }).waitFor();
+  assert.equal(await inspector.locator('[data-field="life-stage"]').textContent(), '幼鱼');
+  assert.ok(await inspector.locator('[data-field="fish-age"]').isVisible());
   await page.setViewportSize({ width: 720, height: 520 });
   const removeButton = inspector.getByRole('button', { name: '移出鱼缸', exact: true });
   assert.equal(await inspector.getByRole('button').last().textContent(), await removeButton.textContent());
@@ -103,8 +105,68 @@ try {
   await page.reload();
   await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
   assert.deepEqual((await readAnimals()).map(a => a.id), remainingIds);
+  // Use a separate local save with an old fish close to its natural lifespan.
+  const fixture = await page.evaluate(async () => {
+    const { createInitialState, addAnimal } = await import('/src/simulation.js');
+    const tank = createInitialState();
+    tank.animals = [];
+    tank.plants = [];
+    const old = addAnimal(tank, 'guppy').animal;
+    old.lifeAgeHours = old.lifespanHours - 1.5;
+    old.position = { x: -.4, y: 3, z: .8 };
+    const shrimp = addAnimal(tank, 'shrimp').animal;
+    Object.assign(shrimp, { alive: false, health: 0, deathHours: 0, corpseMass: 0, causeOfDeath: '缺氧' });
+    const young = addAnimal(tank, 'zebra').animal;
+    tank.speed = 3600;
+    tank.paused = true;
+    return { tank, oldId: old.id, youngId: young.id, shrimpId: shrimp.id };
+  });
+  await page.addInitScript(tank => {
+    if (!sessionStorage.getItem('lifecycle-fixture')) {
+      localStorage.setItem('chengjing.aquarium.v1', JSON.stringify(tank));
+      sessionStorage.setItem('lifecycle-fixture', '1');
+    }
+  }, fixture.tank);
+  await page.setViewportSize({ width: 1040, height: 760 });
+  await page.reload();
+  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  const clickModel = async id => {
+    const point = await page.evaluate(id => window.aquariumDiagnostics.screenAnimals.find(a => a.id === id && a.visible), id);
+    assert.ok(point, 'the 3D fish is on screen');
+    await page.mouse.click(point.x, point.y);
+    await page.waitForFunction(id => window.aquariumDiagnostics.selectedId === id, id);
+  };
+  await clickModel(fixture.oldId);
+  assert.equal(await inspector.locator('[data-field="life-stage"]').textContent(), '老年鱼');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Space');
+  await page.waitForFunction(id => window.aquariumDiagnostics.state.animals.find(a => a.id === id)?.alive === false, fixture.oldId);
+  await page.waitForFunction(id => window.aquariumDiagnostics.state.animals.find(a => a.id === id)?.position.y > 3.77, fixture.oldId);
+  // Stop the scene to compare exact saved positions and decay after reopening.
+  await page.keyboard.press('Space');
+  const body = (await readAnimals()).find(a => a.id === fixture.oldId);
+  assert.equal(body.causeOfDeath, '自然衰老');
+  assert.ok(body.corpseMass < body.mass && body.corpseMass > 0);
+  await page.reload();
+  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  const savedBody = (await readAnimals()).find(a => a.id === fixture.oldId);
+  assert.deepEqual(savedBody.position, body.position);
+  assert.equal(savedBody.corpseMass, body.corpseMass);
+  await clickModel(fixture.oldId);
+  await inspector.getByText('自然衰老', { exact: true }).waitFor();
+  assert.ok(parseInt(await inspector.locator('[data-field="decay"]').textContent(), 10) > 0);
+  await page.screenshot({ path: 'artifacts/aquarium-lifecycle.png', omitBackground: true });
+  await inspector.getByRole('button', { name: '捞起遗体', exact: true }).click();
+  await page.waitForFunction(id => !window.aquariumDiagnostics.screenAnimals.some(a => a.id === id), fixture.oldId);
+  assert.deepEqual((await readAnimals()).map(a => a.id), [fixture.shrimpId,fixture.youngId]);
+  await page.mouse.move(500, 400);
+  await page.getByRole('button', { name: '添加生物', exact: true }).click();
+  await page.getByRole('button', { name: '捞起全部遗体（1）', exact: true }).click();
+  await page.reload();
+  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  assert.deepEqual((await readAnimals()).map(a => a.id), [fixture.youngId]);
   assert.deepEqual(errors, []);
-  const report = { previews: previews.length, fishAdded: newSpecies, inspected: selected.label, restored: restored.length, removed: selected.label, remaining: remainingIds.length, errors };
+  const report = { previews: previews.length, fishAdded: newSpecies, inspected: selected.label, restored: restored.length, removed: selected.label, remaining: remainingIds.length, corpseNetted: body.causeOfDeath, errors };
   await writeFile('artifacts/smoke-species.json', JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));
 } finally {

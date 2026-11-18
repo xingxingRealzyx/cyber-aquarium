@@ -5,7 +5,7 @@ import { sceneryPanel } from './scenery-panel.js';
 import {
   createInitialState, restoreState, advanceSimulation, addAnimal, addPlant, feed,
   changeWater, removeAnimal, removeDead, getAssessment, SPECIES,
-  addHardscape, removeHardscape, removePlant,
+  addHardscape, removeHardscape, removePlant, fishLifeStage, corpseDecay,
 } from './simulation.js';
 
 const SAVE_KEY = 'chengjing.aquarium.v1';
@@ -104,8 +104,9 @@ function metric(name, value, unit, note, valueRatio, severity = '') {
 function animalLabel(a) {
   return a.label || `${SPECIES[a.species]?.name || '水下居民'} · ${a.id.slice(-4)}`;
 }
+const stageNames = { juvenile: '幼鱼', adult: '成鱼', senior: '老年鱼' };
 function behaviorLabel(a) {
-  if(!a.alive) return '已死亡';
+  if(!a.alive) return '已死亡 · 待捞起';
   if(state.paused) return '已暂停';
   return ({seeking:'正在追逐饲料',eating:'正在进食',resting:'饱腹休憩',gasping:'浮头呼吸',grazing:'底部觅食',swimming:'自由游动'})[a.behavior] || '自由游动';
 }
@@ -133,6 +134,15 @@ function waterPanel() {
     <div class="equipment">${[['filter','生物过滤','硝化菌分解含氮废物'],['aerator','增氧泵','维持水体气体交换'],['light','水草灯','光合作用与昼夜呼吸'],['heater','恒温加热','缓慢维持目标水温']].map(([key,title,desc])=>`<button class="equipment-row" data-equipment="${key}" role="switch" aria-checked="${state.equipment[key]}"><span><b>${title}</b><small>${desc}</small></span><span class="switch ${state.equipment[key]?'on':''}"></span></button>`).join('')}</div>
     <div class="temperature-control"><label for="temperature">目标温度 <b>${state.equipment.targetTemperature} °C</b></label><input id="temperature" type="range" min="18" max="32" step="1" value="${state.equipment.targetTemperature}" /></div>`;
 }
+function residentRow(a) {
+  const status = a.alive
+    ? `<span class="${a.health<50?'warning':''}">健康 ${Math.round(a.health)}%</span><small class="${a.hunger>70?'warning':''}">饥饿 ${Math.round(a.hunger)}%</small>`
+    : `<span class="warning">已分解 ${Math.round(corpseDecay(a)*100)}%</span>`;
+  return `<button class="resident ${a.id===selectedId?'selected':''}" data-select="${escape(a.id)}">
+    <span class="resident-dot ${a.species} ${!a.alive?'dead':''}"></span>
+    <span class="resident-name">${escape(animalLabel(a))}<small>${behaviorLabel(a)}</small></span>
+    <span class="resident-vitals">${status}</span></button>`;
+}
 function lifePanel() {
   const alive=state.animals.filter(x=>x.alive), dead=state.animals.filter(x=>!x.alive);
   const speciesCards = Object.entries(SPECIES).map(([key, species]) => `
@@ -142,11 +152,11 @@ function lifePanel() {
       <small lang="la">${escape(species.latin)}</small>
     </button>`).join('');
   return `<div class="section-label"><span>水下居民</span><span>${alive.length} 存活${dead.length?` · ${dead.length} 死亡`:''}</span></div>
+    ${dead.length?`<button class="danger-btn" data-action="remove-dead">捞起全部遗体（${dead.length}）</button><p class="micro-note">也可点选一只遗体单独捞起。</p>`:''}
     <div class="species-grid">${speciesCards}</div>
     <button class="wide-btn" data-action="scenery">${icon('leaf')} 管理水草与造景</button>
-    ${dead.length?`<button class="danger-btn" data-action="remove-dead">移除 ${dead.length} 只死亡生物</button><p class="micro-note">未移除的尸体会腐败并污染水体。</p>`:''}
     <div class="section-label"><span>个体状态</span><span>点击鱼也可查看</span></div>
-    <div class="residents">${state.animals.map(a=>`<button class="resident ${a.id===selectedId?'selected':''}" data-select="${escape(a.id)}"><span class="resident-dot ${a.species} ${!a.alive?'dead':''}"></span><span class="resident-name">${escape(animalLabel(a))}<small>${behaviorLabel(a)}</small></span><span class="resident-vitals"><span class="${a.health<50?'warning':''}">健康 ${Math.round(a.health)}%</span><small class="${a.hunger>70?'warning':''}">饥饿 ${Math.round(a.hunger)}%</small></span></button>`).join('')}</div>`;
+    <div class="residents">${state.animals.map(residentRow).join('')}</div>`;
 }
 function updateControls() {
   if (!desktop?.checkForUpdate) return '';
@@ -253,25 +263,48 @@ function updateInspector() {
   if (inspector.dataset.animalId !== a.id) inspector.scrollTop = 0;
   inspector.dataset.animalId=a.id;
   inspector.querySelector('.individual-feed').hidden=!a.alive;
+  inspector.querySelector('[data-action="remove-animal"]').textContent = a.alive ? '移出鱼缸' : '捞起遗体';
+  const stage = fishLifeStage(a);
+  const ageFacts = stage ? `
+    <div><dt>${a.alive?'鱼龄':'死亡时鱼龄'}</dt><dd data-field="fish-age">${durationLabel(a.lifeAgeHours)}</dd></div>
+    <div><dt>生命阶段</dt><dd data-field="life-stage">${stageNames[stage]}</dd></div>` : '';
+  const heading = `<span class="eyebrow">INDIVIDUAL LIFE · 个体档案</span>
+    <header class="individual-heading"><h2>${escape(animalLabel(a))}</h2><small>${escape(SPECIES[a.species]?.latin)}</small></header>`;
+  const details = inspector.querySelector('.individual-details');
+  if (!a.alive) {
+    const decay = Math.round(100 * corpseDecay(a));
+    details.innerHTML = `${heading}
+      <p class="behavior-badge danger" data-field="behavior"><i></i>${behaviorLabel(a)}</p>
+      <section class="individual-vitals" aria-label="遗体状态">
+        <div class="vital-row"><span>腐败进度</span><strong data-field="decay">${decay}<small>%</small></strong></div>${bar(decay,100,'warning')}
+      </section>
+      <dl class="individual-facts">
+        <div><dt>死因</dt><dd>${escape(a.causeOfDeath||'未知')}</dd></div>
+        <div><dt>死亡已过</dt><dd>${durationLabel(Math.max(0,state.elapsedHours-a.deathHours))}</dd></div>
+        ${ageFacts}
+      </dl>
+      <p class="individual-note">遗体分解会消耗溶氧并释放氨。捞起后，已经进入水中的污染物仍需过滤或换水处理。</p>`;
+    return;
+  }
   const hunger=Math.round(a.hunger), health=Math.round(a.health), stress=Math.round((a.stress||0)*100);
   const lastMeal=a.lastMealHours==null?'尚未摄食':state.elapsedHours-a.lastMealHours<1/60?'刚刚':`${durationLabel(Math.max(0,state.elapsedHours-a.lastMealHours))}前`;
-  inspector.querySelector('.individual-details').innerHTML=`<span class="eyebrow">INDIVIDUAL LIFE · 个体档案</span>
-    <header class="individual-heading"><h2>${escape(animalLabel(a))}</h2><small>${escape(SPECIES[a.species]?.latin)}</small></header>
-    <p class="behavior-badge ${a.behavior==='seeking'||a.behavior==='eating'?'feeding':''} ${!a.alive?'danger':''}" data-field="behavior"><i></i>${behaviorLabel(a)}</p>
+  details.innerHTML=`${heading}
+    <p class="behavior-badge ${a.behavior==='seeking'||a.behavior==='eating'?'feeding':''}" data-field="behavior"><i></i>${behaviorLabel(a)}</p>
     <section class="individual-vitals" aria-label="个体状态">
       <div class="vital-row"><span>健康度</span><strong data-field="health">${health}<small>%</small></strong></div>${bar(health,100,health<45?'danger':health<75?'warning':'')}
       <div class="vital-row"><span>饥饿度</span><strong data-field="hunger">${hunger}<small>%</small></strong></div>${bar(hunger,100,hunger>80?'danger':'warning')}
       <div class="vital-row"><span>环境压力</span><strong data-field="stress">${stress}<small>%</small></strong></div>${bar(stress,100,stress>60?'danger':'')}
     </section>
     <dl class="individual-facts">
+      ${ageFacts}
       <div><dt>体重</dt><dd data-field="mass">${(a.mass||SPECIES[a.species].mass).toFixed(2)} g</dd></div>
       <div><dt>入缸时长</dt><dd>${durationLabel(a.ageHours)}</dd></div>
       <div><dt>上次进食</dt><dd data-field="last-meal">${lastMeal}</dd></div>
       <div><dt>累计摄食</dt><dd data-field="eaten">${((a.totalEatenGrams||0)*1000).toFixed(1)} mg · ${a.bites||0} 口</dd></div>
       <div><dt>代谢系数</dt><dd>${(a.metabolism||1).toFixed(2)}×</dd></div>
-      <div><dt>当前食欲</dt><dd>${!a.alive?'—':hunger>75?'十分饥饿':hunger>40?'想吃东西':hunger>12?'略有食欲':'已经吃饱'}</dd></div>
+      <div><dt>当前食欲</dt><dd>${hunger>75?'十分饥饿':hunger>40?'想吃东西':hunger>12?'略有食欲':'已经吃饱'}</dd></div>
     </dl>
-    <p class="individual-note">${!a.alive?`死因：${escape(a.causeOfDeath||'未知')}。请及时清理。`:a.behavior==='gasping'?'氧气不足，优先改善供氧。':state.paused?'生态已暂停，继续模拟后才会进食。':'饥饿度越高，越积极觅食；吃到饲料后才会下降。'}</p>`;
+    <p class="individual-note">${a.behavior==='gasping'?'氧气不足，优先改善供氧。':state.paused?'生态已暂停，继续模拟后才会进食。':'饥饿度越高，越积极觅食；吃到饲料后才会下降。'}</p>`;
 }
 function perform(action) {
   $('#hint').classList.add('dismissed');
@@ -288,7 +321,10 @@ function perform(action) {
     selectAnimal(null);
     notify(result.message);
   }
-  else if(action==='remove-dead') { removeDead(state); notify('已移除死亡生物'); }
+  else if(action==='remove-dead') {
+    const {count} = removeDead(state);
+    if (count) notify(`已捞起 ${count} 只遗体`);
+  }
   else if(action==='rotate') { autoRotate=!autoRotate; renderer?.setAutoRotate(autoRotate); document.querySelector('[data-action="rotate"]').classList.toggle('selected',autoRotate); }
   else if(action==='reset-view') { autoRotate=false; renderer?.setAutoRotate(false); renderer?.resetView(); document.querySelector('[data-action="rotate"]').classList.remove('selected'); }
   else if(action==='pause') state.paused=!state.paused;

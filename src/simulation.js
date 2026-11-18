@@ -1,19 +1,19 @@
 /** Freshwater ecosystem model. Nitrogen concentrations are mg N/L, time is hours. */
 export const SPECIES = Object.freeze({
-  neon: { name: '霓虹灯鱼', latin: 'Paracheirodon innesi', mass: 0.35, temperature: [21, 27], ph: [6, 7.8], sensitivity: 1.1, type: 'fish' },
-  guppy: { name: '孔雀鱼', latin: 'Poecilia reticulata', mass: 0.65, temperature: [22, 28], ph: [6.8, 8.2], sensitivity: 0.9, type: 'fish' },
+  neon: { maturityDays: 180, lifespanDays: 1825, name: '霓虹灯鱼', latin: 'Paracheirodon innesi', mass: 0.35, temperature: [21, 27], ph: [6, 7.8], sensitivity: 1.1, type: 'fish' },
+  guppy: { maturityDays: 75, lifespanDays: 900, name: '孔雀鱼', latin: 'Poecilia reticulata', mass: 0.65, temperature: [22, 28], ph: [6.8, 8.2], sensitivity: 0.9, type: 'fish' },
   angelfish: {
-    name: '神仙鱼（幼鱼）', latin: 'Pterophyllum scalare', type: 'fish',
+    maturityDays: 300, lifespanDays: 2920, name: '神仙鱼', latin: 'Pterophyllum scalare', type: 'fish',
     mass: 1.25, temperature: [24, 29], ph: [6, 7.6], sensitivity: 1.05,
     swim: { cruiseSpeed: 0.36, cruisingHeight: 1.65, pace: 0.68 },
   },
   zebra: {
-    name: '斑马鱼', latin: 'Danio rerio', type: 'fish',
+    maturityDays: 90, lifespanDays: 1460, name: '斑马鱼', latin: 'Danio rerio', type: 'fish',
     mass: 0.42, temperature: [22, 28], ph: [6.5, 8], sensitivity: 0.95,
     swim: { cruiseSpeed: 0.78, cruisingHeight: 2.30, pace: 1.50 },
   },
   harlequin: {
-    name: '三角灯鱼', latin: 'Trigonostigma heteromorpha', type: 'fish',
+    maturityDays: 150, lifespanDays: 1825, name: '三角灯鱼', latin: 'Trigonostigma heteromorpha', type: 'fish',
     mass: 0.58, temperature: [23, 28], ph: [6, 7.5], sensitivity: 1.05,
     swim: { cruiseSpeed: 0.58, cruisingHeight: 1.90, pace: 1.08 },
   },
@@ -58,19 +58,60 @@ const seedFromId = value => { let hash = 2166136261; for (const char of String(v
 export const substrateHeight = (x,z) => 0.24 + 0.17 * (z + 2) / 4 + 0.18 * Math.exp(-((x + 2.3) ** 2 + (z - 0.3) ** 2) / 2.5) + 0.045 * Math.sin(x * 1.7 + z);
 
 function animal(species, serial = 1, seed = Math.random()) {
-  const size = .85 + random(seed + 21) * .35;
   const x = (random(seed + 31) - .5) * 5.5, z = (random(seed + 32) - .5) * 2.2;
-  const fish = SPECIES[species].type === 'fish';
+  const spec = SPECIES[species];
+  const fish = spec.type === 'fish';
+  const ageAtStocking = fish ? spec.maturityDays * 24 * (.25 + .2 * random(seed + 24)) : 0;
+  const size = fish
+    ? adultSize(seed) * (.58 + .34 * ageAtStocking / (spec.maturityDays * 24))
+    : .85 + random(seed + 21) * .35;
+  const mass = spec.mass * size ** (fish ? 3 : 2);
   return {
     id: key('animal'), species, serial, label: `${SPECIES[species].name} #${String(serial).padStart(2,'0')}`,
     health: 100, hunger: 12 + random(seed + 9) * 30, alive: true,
     ageHours: 0, deathHours: null, seed, corpseMass: 0, stress: 0, causeOfDeath: null,
-    size, mass: SPECIES[species].mass * size ** 2, metabolism: .85 + random(seed + 22) * .3,
+    size, mass, metabolism: .85 + random(seed + 22) * .3,
+    ...(fish && {
+      lifeAgeHours: ageAtStocking,
+      lifespanHours: spec.lifespanDays * 24 * (.85 + .3 * random(seed + 23)),
+      growthReserve: mass * .01,
+    }),
     position: { x, y: fish ? 1.5 + random(seed + 33) * 1.4 : substrateHeight(x,z) + .025, z },
     velocity: { x: fish ? .45 : .03, y: 0, z: 0 },
     behavior: fish ? 'swimming' : 'grazing', targetFoodId: null,
     lastMealHours: null, totalEatenGrams: 0, bites: 0, biteFlash: 0, biteCooldown: 0,
   };
+}
+
+function adultSize(seed) {
+  return 1.05 + random(seed + 21) * .2;
+}
+
+export function fishLifeStage(a) {
+  const spec = SPECIES[a.species];
+  if (spec.type !== 'fish') return null;
+  if (a.lifeAgeHours < spec.maturityDays * 24) return 'juvenile';
+  return a.lifeAgeHours < a.lifespanHours * .8 ? 'adult' : 'senior';
+}
+
+export function corpseDecay(a) {
+  return a.alive ? 0 : clamp(1 - a.corpseMass / a.mass, 0, 1);
+}
+
+function growFish(a, spec, dt) {
+  a.lifeAgeHours += dt;
+  if (a.growthReserve <= 0 || a.lifeAgeHours >= .8 * a.lifespanHours) return;
+  const targetSize = adultSize(a.seed);
+  if (a.size >= targetSize) return;
+  const condition = clamp((80 - a.hunger) / 50, 0, 1) * clamp((a.health - 35) / 55, 0, 1);
+  const remainingMass = Math.max(0, spec.mass * targetSize ** 3 - a.mass);
+  const growth = Math.min(a.growthReserve,
+    remainingMass * decayFraction(3 * condition / (spec.maturityDays * 24), dt),
+    a.mass * ((targetSize / a.size) ** 3 - 1));
+  // Scale visible length consistently with the individual fish's change in wet mass.
+  a.size *= Math.cbrt(1 + growth / a.mass);
+  a.mass += growth;
+  a.growthReserve -= growth;
 }
 
 export function reconcileFood(state) {
@@ -159,6 +200,10 @@ export function consumePellet(state, animalId, pelletId) {
   a.hunger = Math.max(2, a.hunger - amount / (mass * .02) * 85);
   a.lastMealHours = state.elapsedHours; a.totalEatenGrams += amount; a.bites += 1;
   a.biteFlash = .45; a.biteCooldown = .8; a.behavior = 'eating';
+  if (SPECIES[a.species].type === 'fish') {
+    // Retained feed nutrients support later tissue growth (grams of wet biomass).
+    a.growthReserve = Math.min(mass * .05, a.growthReserve + amount * .35);
+  }
   // Approximate feed nitrogen: 55% excreted, 35% solid waste, 10% retained.
   state.water.ammonia += amount * 70 / state.volumeLiters * .55;
   state.detritus += amount * .35;
@@ -216,7 +261,7 @@ export function removeAnimal(state, id) {
   const index = state.animals.findIndex(animal => animal.id === id);
   if (index < 0) return { ok: false, message: '这只生物已不在缸中' };
   const [animal] = state.animals.splice(index, 1);
-  const message = `已移出${animal.label}`;
+  const message = animal.alive ? `已移出${animal.label}` : `已捞起${animal.label}的遗骸`;
   record(state, message);
   return { ok: true, message };
 }
@@ -291,8 +336,8 @@ export function changeWater(state, fraction = 0.25) {
 export function removeDead(state) {
   const count = state.animals.filter(a => !a.alive).length;
   state.animals = state.animals.filter(a => a.alive);
-  if (count) record(state, `清理 ${count} 只死亡生物，减少后续腐败污染。`);
-  return { ok: true, count, message: count ? `已清理 ${count} 只死亡生物` : '没有需要清理的死亡生物' };
+  if (count) record(state, `捞起 ${count} 只死亡生物，减少后续腐败污染。`);
+  return { ok: true, count, message: count ? `已捞起 ${count} 只死亡生物` : '没有需要清理的死亡生物' };
 }
 
 export function getAssessment(state) {
@@ -324,9 +369,11 @@ function integrate(state, dt) {
   const plantMass = state.plants.reduce((sum, p) => sum + p.biomass, 0);
   living.forEach(a => {
     a.ageHours += dt;
-    a.hunger = clamp(a.hunger + (SPECIES[a.species].type === 'fish' ? 0.9 : 0.45) * a.metabolism * thermal * dt, 0, 100);
+    const spec = SPECIES[a.species];
+    if (spec.type === 'fish') growFish(a, spec, dt);
+    a.hunger = clamp(a.hunger + (spec.type === 'fish' ? 0.9 : 0.45) * a.metabolism * thermal * dt, 0, 100);
     // Bottom dwellers graze established biofilm and detritus, not nitrogen itself.
-    if (SPECIES[a.species].type === 'invertebrate') {
+    if (spec.type === 'invertebrate') {
       const grazed = Math.min(state.detritus, 0.0005 * dt);
       state.detritus -= grazed;
       a.hunger = Math.max(0, a.hunger - (grazed * 900 + 0.32 * dt));
@@ -402,14 +449,20 @@ function integrate(state, dt) {
     const damage = Object.values(stressors).reduce((sum, v) => sum + v, 0) * spec.sensitivity;
     a.stress = clamp(damage / 8, 0, 1);
     const healing = damage < 0.08 && a.hunger < 75 ? 0.6 : 0;
-    a.health = clamp(a.health + (healing - damage) * dt, 0, 100);
+    // Health reserve declines through the final fifth of the individual lifespan.
+    const senescence = spec.type === 'fish' ? clamp(1 - 5 * (1 - a.lifeAgeHours / a.lifespanHours), 0, 1) : 0;
+    const healthCeiling = 100 * (1 - senescence ** 2);
+    a.health = clamp(a.health + (healing - damage) * dt, 0, healthCeiling);
     if (a.health <= 0) {
       a.alive = false;
       a.deathHours = state.elapsedHours + dt;
       a.corpseMass = a.mass;
       a.behavior = 'dead'; a.targetFoodId = null;
-      a.causeOfDeath = Object.entries(stressors).sort((x, y) => y[1] - x[1])[0][0];
-      record(state, `${a.label}因${a.causeOfDeath}死亡。请清理尸体并改善环境。`, 'death');
+      a.deathBehaviorSeconds = state.behaviorSeconds;
+      a.deathHeading = Math.hypot(a.velocity.x, a.velocity.z) > .001
+        ? Math.atan2(-a.velocity.z, a.velocity.x) || 0 : (a.seed * 2 - 1) * Math.PI;
+      a.causeOfDeath = healthCeiling === 0 ? '自然衰老' : Object.entries(stressors).sort((x, y) => y[1] - x[1])[0][0];
+      record(state, `${a.label}因${a.causeOfDeath}死亡。请捞起遗骸，避免继续污染水质。`, 'death');
     }
   }
   state.elapsedHours += dt;
@@ -457,6 +510,7 @@ export function restoreState(raw) {
     if (typeof data.equipment?.[name] === 'boolean') base.equipment[name] = data.equipment[name];
   }
   base.equipment.targetTemperature = numeric(data.equipment?.targetTemperature, 25, 16, 34);
+  base.behaviorSeconds = numeric(data.behaviorSeconds,0,0,1e10);
   if (Array.isArray(data.animals)) {
     const usedIds = new Set();
     base.animals = data.animals.filter(a => a && Object.hasOwn(SPECIES, a.species)).slice(0, MAX_ANIMALS).map((a,index) => {
@@ -470,8 +524,26 @@ export function restoreState(raw) {
       restored.ageHours = numeric(a.ageHours, 0, 0, 1e7);
       restored.seed = numeric(a.seed, restored.seed, 0, 1);
       restored.label = typeof a.label === 'string' && a.label.trim() ? a.label.slice(0,80) : restored.label;
-      restored.size = numeric(a.size,restored.size,.7,1.5);
-      restored.mass = numeric(a.mass,SPECIES[a.species].mass * restored.size ** 2,.03,3);
+      const spec = SPECIES[a.species];
+      const fish = spec.type === 'fish';
+      // Old angelfish labels named a life stage in the species name.
+      const number = String(restored.serial).padStart(2, '0');
+      if (a.species === 'angelfish' && restored.label === `神仙鱼（幼鱼） #${number}`) {
+        restored.label = `神仙鱼 #${number}`;
+      }
+      const legacyBody = !Number.isFinite(a.lifeAgeHours);
+      const defaultSize = legacyBody ? .85 + random(restored.seed + 21) * .35 : restored.size;
+      restored.size = numeric(a.size, defaultSize, .6, 1.5);
+      const defaultMass = spec.mass * restored.size ** (legacyBody ? 2 : 3);
+      restored.mass = numeric(a.mass, defaultMass, .03, 3);
+      if (fish) {
+        restored.lifespanHours = numeric(a.lifespanHours, restored.lifespanHours, spec.lifespanDays * 24 * .85, spec.lifespanDays * 24 * 1.15);
+        // v0.6.4 tracked time in the tank only. Preserve its body and give each
+        // established resident adult years ahead, even in a very old aquarium.
+        const legacyAge = Math.min(spec.maturityDays * 24 + restored.ageHours, restored.lifespanHours * .6);
+        restored.lifeAgeHours = numeric(a.lifeAgeHours, legacyAge, 0, 1e7);
+        restored.growthReserve = numeric(a.growthReserve, 0, 0, restored.mass * .05);
+      }
       restored.metabolism = numeric(a.metabolism,restored.metabolism,.65,1.5);
       for (const [axis,min,max] of [['x',-3.65,3.65],['y',.15,4.05],['z',-1.65,1.65]]) restored.position[axis] = numeric(a.position?.[axis],restored.position[axis],min,max);
       for (const axis of ['x','y','z']) restored.velocity[axis] = numeric(a.velocity?.[axis],restored.velocity[axis],-4,4);
@@ -483,7 +555,12 @@ export function restoreState(raw) {
       restored.biteCooldown = numeric(a.biteCooldown,0,0,.8);
 
       restored.deathHours = restored.alive ? null : numeric(a.deathHours, base.elapsedHours, 0, base.elapsedHours);
-      restored.corpseMass = restored.alive ? 0 : numeric(a.corpseMass, SPECIES[a.species].mass, 0, 5);
+      if (!restored.alive) {
+        const sinceDeath = base.elapsedHours - restored.deathHours;
+        restored.corpseMass = numeric(a.corpseMass, restored.mass * Math.exp(-.025 * sinceDeath), 0, 5);
+        restored.deathBehaviorSeconds = numeric(a.deathBehaviorSeconds, Math.max(0, base.behaviorSeconds - 10), 0, base.behaviorSeconds);
+        restored.deathHeading = numeric(a.deathHeading, (restored.seed * 2 - 1) * Math.PI, -Math.PI, Math.PI);
+      }
       restored.stress = numeric(a.stress, 0, 0, 1);
       restored.causeOfDeath = typeof a.causeOfDeath === 'string' ? a.causeOfDeath.slice(0, 80) : null;
       return restored;
@@ -523,7 +600,6 @@ export function restoreState(raw) {
     if (usedLabels.has(a.label)) { a.serial=base.nextAnimalNumber++; a.label=`${SPECIES[a.species].name} #${String(a.serial).padStart(2,'0')}`; }
     usedLabels.add(a.label);
   }
-  base.behaviorSeconds = numeric(data.behaviorSeconds,0,0,1e10);
   const pelletIds = new Set();
   base.foodPellets = [];
   if (Array.isArray(data.foodPellets)) {
