@@ -1,0 +1,14 @@
+The substrate uses two CC0 photographic PBR scans from Poly Haven.
+
+Ganges River Pebbles by Amal Kumar
+https://polyhaven.com/a/ganges_river_pebbles
+
+Gravel Floor photographed by Matterfield and processed by Jenelle van Heerden
+https://polyhaven.com/a/gravel_floor
+
+License for both scans
+https://polyhaven.com/license
+
+Color, OpenGL normal and packed occlusion/roughness maps are resampled at
+different grain sizes, graded and blended into the sand and river gravel.
+The side texture combines the same scans into a sediment cross-section.

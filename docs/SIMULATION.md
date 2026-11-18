@@ -1,0 +1,57 @@
+# 淡水生态模拟 v0.2
+
+本原型是有因果关系的教育／桌面宠物模拟，不是可用于真实鱼缸的水质预测器。氮循环、氧气消耗、氨毒性方向参照水产资料；摄食、过滤容量、植物生长及健康损伤速率是为了可观察、可交互而校准的模型参数，未经过物种实验数据拟合。
+
+## 单位与初始条件
+
+- 容积 60 L，成熟生物过滤；霓虹灯鱼 6、孔雀鱼 3、樱花虾 2、斑马螺 1，水草 9 丛。
+- `elapsedHours` 单位为模拟小时。`advanceSimulation(state, hours)` 不处理暂停或速度，由调用端决定实际推进时间。一次调用最多推进 30 天，以 5 分钟为最大积分步长。
+- `ammonia` 是总氨氮 TAN-N，`nitrite` 是 NO₂-N，`nitrate` 是 NO₃-N；三者都是 **mg N/L**，不能直接与以离子质量标定的试剂数值混用。换算：NO₂ = NO₂-N × 46/14；NO₃ = NO₃-N × 62/14。
+- `unionizedAmmonia` 是非离子氨 NH₃-N。溶氧为 mg O₂/L，温度为 °C，饲料与有机碎屑为 g。
+
+## 已实现的机制
+
+1. 摄食、基础代谢、残饵、有机碎屑和尸体腐败产生氨；残饵与尸体还产生耗氧负荷。鱼只能在接近可达饲料颗粒后摄食，不再按全缸比例自动分配饲料；虾、螺还能摄取底部碎屑和成熟缸的生物膜。
+2. 两级硝化：氨 → 亚硝酸盐 → 硝酸盐。使用统一的氮质量单位，在无输入、无植物吸收时保持溶解无机氮守恒。硝化受过滤、氧气、温度、pH 和菌量影响，耗氧并消耗碱度。
+3. 氨非离子比例采用 `1 / (1 + 10^(pKa - pH))`，`pKa = 0.09018 + 2729.92 / (273.15 + T)`。温度与 pH 上升时，毒性更高的 NH₃ 比例上升。
+4. 设备影响氧气交换；动物与植物呼吸耗氧；开灯时水草光合作用产氧、吸收硝酸盐，关灯后水草继续呼吸。当前灯光是手动持续状态，没有自动光周期。
+5. 健康随缺氧、氨、亚硝酸盐、长期高硝酸盐、温度、pH、饥饿累积下降。恶劣条件会导致死亡；死亡个体不会自行复活，清理前持续腐败。健康环境下缓慢恢复。
+6. 换水精确稀释三种溶解氮，不清除滤材中的硝化菌。新水假定已经除氯且温度匹配；轻度清除悬浮残饵与碎屑。pH 与碱度变化为简化混合模型，没有完整碳酸盐平衡求解。
+7. 清澈程度只取决于悬浮污染，透明水也可以有毒。健康判断独立于视觉清澈度。
+
+## 范围与局限
+
+初版不模拟繁殖、遗传、疾病／病原体、寄生虫、盐度、GH、药物、铜毒性、溶解 CO₂、完整碳酸盐缓冲、底床厌氧反硝化、藻类群落、蒸发和自来水氯。不同物种阈值为玩法近似，不能作真实饲养标准。饥饿与健康是归一化的状态变量；寿命死亡未实现。菌量为相对有效容量，不是实测细菌数。生物总数 80、水草 40 是性能上限，不代表安全饲养密度。
+
+默认每次投喂 0.08 g，生成 32 个可追逐的颗粒；连续多次投喂会真正累积残饵。小量每日投喂、每次让生物实际追食 30 秒、每周换水 25% 的初始缸在 14 天回归测试中保持健康，另外验证过 50 个确定性随机场景。关闭循环与灯光后投下 5 g 饲料的压力测试会引发耗氧、氨积累与死亡。长期不喂食会造成饥饿死亡。
+
+## 个体与进食行为
+
+每个动物保留独立 ID、唯一标签、健康、饥饿、压力、入缸时长、体型、体重、代谢倍率、位置与速度，以及最近摄食时间、累计饲料摄入和摄食口数。初始体型、代谢和饥饿存在差异；迁移旧存档时保留原有 ID、健康、饥饿和死亡状态，按既有随机种子补全个体参数。体重目前是个体设定参数，没有实现随摄食成长或寿命模型。
+
+`advanceBehavior(state, realDtSeconds)` 按现实秒推进空间行为，与水质的模拟小时分离。它以不超过 1/30 秒的子步推进，一次最多处理 30 秒；暂停时不改变位置或饲料。高饥饿鱼优先选择颗粒，并以更高速度接近；饱食、死亡或严重缺氧的鱼不会正常争食。颗粒在约 25–40 秒内沉降，沉底后留给虾、螺等底栖动物。鱼会忽略低于其可达高度或被主要石块阻隔的食物，避免盯住旧残饵而忽略新投喂。
+
+`consumePellet(state, animalId, pelletId)` 检查存活、饥饿阈值、冷却、朝向及距颗粒中心不超过 0.30 世界单位的接触条件。只有成功接触才降低该个体的饥饿，增加其摄食记录，减少对应颗粒质量，并计入排泄氨和固体废物。一次摄食后有 0.8 秒冷却和 0.45 秒可视反馈。饥饿低于 8 时停止争食；摄食不会使饥饿低于 2。这些阈值是交互玩法标定值，不是物种实验测量。
+
+`state.foodPellets` 是饲料的位置和质量来源，`state.food` 等于颗粒质量之和。最多保留 160 个代表性颗粒，达到上限时合并旧颗粒以给新投喂让出绘制空间，原有质量不会因显示上限而丢失。换水和腐败按比例减少颗粒质量，剩余颗粒会随存档恢复。只有旧存档中尚无颗粒信息的散装残饵，会在迁移时转换为沉底颗粒。
+
+## 资料
+
+- [UF/IFAS：Ammonia in Aquatic Systems](https://ask.ifas.ufl.edu/publication/FA031)：氨来源、TAN 与非离子氨、硝化及管理原则。
+- [US EPA：Ammonia](https://www.epa.gov/caddis/ammonia)：氨毒性、pH 与温度影响，以及硝化耗氧的因果联系。
+- [US EPA：2013 Freshwater Ammonia Criteria](https://www.epa.gov/sites/default/files/2015-08/documents/aquatic-life-ambient-water-quality-criteria-for-ammonia-freshwater-2013.pdf)：淡水氨化学与温度、pH 依赖；模型的健康数值不是对该标准的实现。
+- [US EPA：2013 氨标准全文](https://nepis.epa.gov/Exe/ZyPURL.cgi?Dockey=P100VT5L.TXT)：Emerson 非离子氨比例与 pKa 公式。
+- [US EPA：Technical Guidance Manual, Streams and Rivers](https://www.epa.gov/sites/default/files/2019-12/documents/technical-guidance-tmdl-book2.pdf)：两步硝化分别消耗约 3.43 与 1.14 g O₂/g N。
+- [UF/IFAS：Fish Health Management in Recirculating Aquaculture Systems](https://ask.ifas.ufl.edu/publication/fa099)：循环系统水质、过滤与管理背景。
+
+## API
+
+`createInitialState()`、`restoreState(raw)` 返回状态；`advanceSimulation(state, hours)` 原地推进并返回状态。
+
+`addAnimal(state, species)`、`addPlant(state, species)`、`feed(state, grams = 0.08)`、`changeWater(state, fraction = 0.25)`、`removeDead(state)` 原地更新，返回 `{ ok, message, ... }`；无效操作返回 `ok: false`。
+
+`getAssessment(state)` 返回 `{ level: 'good' | 'warning' | 'danger', label, message }`。
+
+`SPECIES` 与 `PLANTS` 提供中文名、拉丁名及参数；`ammoniaFraction(temperature, ph)` 返回 NH₃ 在总氨中的比例。`consumePellet(...)` 返回 `{ ok, grams }`；`advanceBehavior(...)` 位于 `src/behavior.js`，原地更新并返回状态。
+
+存档恢复会过滤未知种类、重复 ID、非有限数值和超出范围的参数；保留死亡个体和空鱼缸。历史最多 168 个小时采样点，事件最多 50 条。
