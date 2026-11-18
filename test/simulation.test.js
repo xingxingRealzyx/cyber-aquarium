@@ -95,8 +95,13 @@ test('unionized ammonia fraction rises with pH and temperature', () => {
   assert.ok(Math.abs(ammoniaFraction(25, 7) - 0.00564) < 0.0001);
 });
 
-test('mature starter tank stays healthy with small daily feeds and weekly water changes', () => {
+test('a mature biofilter sustains the starter bioload with daily feeds and weekly water changes', () => {
   const s = createInitialState();
+  // Keep the same bioload for the two-week water-quality comparison.
+  for (const animal of s.animals) {
+    if (animal.lifespanHours) animal.lifespanHours = 24 * 30;
+  }
+  s.infectionClock.nextAtHours = Number.MAX_SAFE_INTEGER;
   for (let day = 0; day < 14; day++) {
     feed(s);
     // Feed must actually be reached before chemistry can advance through a day.
@@ -129,10 +134,13 @@ test('heavy overfeeding and loss of circulation cause low oxygen, mortality, and
 
 test('long-term starvation kills fish instead of silently keeping them alive', () => {
   const s = createInitialState();
+  // The longest-lived species has enough time to starve before it reaches old age.
+  s.infectionClock.nextAtHours = Number.MAX_SAFE_INTEGER;
+  const { animal: angel } = addAnimal(s, 'angelfish');
   advanceSimulation(s, 24 * 30);
+  assert.equal(angel.causeOfDeath, '长期饥饿');
   const fish = s.animals.filter(a => ['neon', 'guppy'].includes(a.species));
   assert.ok(fish.every(a => !a.alive));
-  assert.ok(fish.some(a => a.causeOfDeath === '长期饥饿'));
 });
 
 test('nitrite toxicity damages fish even when water is clear and oxygenated', () => {

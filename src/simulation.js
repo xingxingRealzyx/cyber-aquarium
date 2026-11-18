@@ -1,19 +1,23 @@
+import { INFECTIONS, createInfectionClock, restoreInfectionClock, restoreInfection, startScheduledInfection, advanceInfection } from './fish-health.js';
+
+export { INFECTIONS };
+
 /** Freshwater ecosystem model. Nitrogen concentrations are mg N/L, time is hours. */
 export const SPECIES = Object.freeze({
-  neon: { maturityDays: 180, lifespanDays: 1825, name: '霓虹灯鱼', latin: 'Paracheirodon innesi', mass: 0.35, temperature: [21, 27], ph: [6, 7.8], sensitivity: 1.1, type: 'fish' },
-  guppy: { maturityDays: 75, lifespanDays: 900, name: '孔雀鱼', latin: 'Poecilia reticulata', mass: 0.65, temperature: [22, 28], ph: [6.8, 8.2], sensitivity: 0.9, type: 'fish' },
+  neon: { maturityDays: 1.25, lifespanDays: 7, name: '霓虹灯鱼', latin: 'Paracheirodon innesi', mass: 0.35, temperature: [21, 27], ph: [6, 7.8], sensitivity: 1.1, type: 'fish' },
+  guppy: { maturityDays: .75, lifespanDays: 4, name: '孔雀鱼', latin: 'Poecilia reticulata', mass: 0.65, temperature: [22, 28], ph: [6.8, 8.2], sensitivity: 0.9, type: 'fish' },
   angelfish: {
-    maturityDays: 300, lifespanDays: 2920, name: '神仙鱼', latin: 'Pterophyllum scalare', type: 'fish',
+    maturityDays: 1.5, lifespanDays: 10, name: '神仙鱼', latin: 'Pterophyllum scalare', type: 'fish',
     mass: 1.25, temperature: [24, 29], ph: [6, 7.6], sensitivity: 1.05,
     swim: { cruiseSpeed: 0.36, cruisingHeight: 1.65, pace: 0.68 },
   },
   zebra: {
-    maturityDays: 90, lifespanDays: 1460, name: '斑马鱼', latin: 'Danio rerio', type: 'fish',
+    maturityDays: 1, lifespanDays: 6, name: '斑马鱼', latin: 'Danio rerio', type: 'fish',
     mass: 0.42, temperature: [22, 28], ph: [6.5, 8], sensitivity: 0.95,
     swim: { cruiseSpeed: 0.78, cruisingHeight: 2.30, pace: 1.50 },
   },
   harlequin: {
-    maturityDays: 150, lifespanDays: 1825, name: '三角灯鱼', latin: 'Trigonostigma heteromorpha', type: 'fish',
+    maturityDays: 1.25, lifespanDays: 7, name: '三角灯鱼', latin: 'Trigonostigma heteromorpha', type: 'fish',
     mass: 0.58, temperature: [23, 28], ph: [6, 7.5], sensitivity: 1.05,
     swim: { cruiseSpeed: 0.58, cruisingHeight: 1.90, pace: 1.08 },
   },
@@ -72,9 +76,9 @@ function animal(species, serial = 1, seed = Math.random()) {
     ageHours: 0, deathHours: null, seed, corpseMass: 0, stress: 0, causeOfDeath: null,
     size, mass, metabolism: .85 + random(seed + 22) * .3,
     ...(fish && {
+      infection: null,
       lifeAgeHours: ageAtStocking,
       lifespanHours: spec.lifespanDays * 24 * (.85 + .3 * random(seed + 23)),
-      growthReserve: mass * .01,
     }),
     position: { x, y: fish ? 1.5 + random(seed + 33) * 1.4 : substrateHeight(x,z) + .025, z },
     velocity: { x: fish ? .45 : .03, y: 0, z: 0 },
@@ -100,18 +104,17 @@ export function corpseDecay(a) {
 
 function growFish(a, spec, dt) {
   a.lifeAgeHours += dt;
-  if (a.growthReserve <= 0 || a.lifeAgeHours >= .8 * a.lifespanHours) return;
+  if (a.lifeAgeHours >= .8 * a.lifespanHours) return;
   const targetSize = adultSize(a.seed);
   if (a.size >= targetSize) return;
   const condition = clamp((80 - a.hunger) / 50, 0, 1) * clamp((a.health - 35) / 55, 0, 1);
   const remainingMass = Math.max(0, spec.mass * targetSize ** 3 - a.mass);
-  const growth = Math.min(a.growthReserve,
-    remainingMass * decayFraction(3 * condition / (spec.maturityDays * 24), dt),
+  // Stored satiety, replenished by actual bites, supports growth on the game clock.
+  const growth = Math.min(remainingMass * decayFraction(3 * condition / (spec.maturityDays * 24), dt),
     a.mass * ((targetSize / a.size) ** 3 - 1));
   // Scale visible length consistently with the individual fish's change in wet mass.
   a.size *= Math.cbrt(1 + growth / a.mass);
   a.mass += growth;
-  a.growthReserve -= growth;
 }
 
 export function reconcileFood(state) {
@@ -200,10 +203,6 @@ export function consumePellet(state, animalId, pelletId) {
   a.hunger = Math.max(2, a.hunger - amount / (mass * .02) * 85);
   a.lastMealHours = state.elapsedHours; a.totalEatenGrams += amount; a.bites += 1;
   a.biteFlash = .45; a.biteCooldown = .8; a.behavior = 'eating';
-  if (SPECIES[a.species].type === 'fish') {
-    // Retained feed nutrients support later tissue growth (grams of wet biomass).
-    a.growthReserve = Math.min(mass * .05, a.growthReserve + amount * .35);
-  }
   // Approximate feed nitrogen: 55% excreted, 35% solid waste, 10% retained.
   state.water.ammonia += amount * 70 / state.volumeLiters * .55;
   state.detritus += amount * .35;
@@ -231,6 +230,7 @@ export function ammoniaFraction(temperature, ph) {
 export function createInitialState() {
   const state = {
     version: 1, elapsedHours: 0, speed: 1, paused: false, volumeLiters: 60,
+    infectionClock: createInfectionClock(0),
     water: { temperature: 25, ph: 7.2, ammonia: 0.015, nitrite: 0.008, nitrate: 5, oxygen: 7.8, clarity: 0.98, unionizedAmmonia: 0 },
     equipment: { filter: true, aerator: true, light: true, heater: true, targetTemperature: 25 },
     animals: ['neon', 'neon', 'neon', 'neon', 'neon', 'neon', 'guppy', 'guppy', 'guppy', 'shrimp', 'shrimp', 'snail'].map((species,index) => animal(species,index + 1)),
@@ -255,6 +255,16 @@ export function addAnimal(state, species) {
   state.animals.push(added);
   record(state, `加入 1 只${SPECIES[species].name}；生物负载增加。`);
   return { ok: true, animal: added, message: `已加入${SPECIES[species].name}` };
+}
+
+export function careForFish(state, id) {
+  const fish = state.animals.find(a => a.id === id);
+  if (!fish?.alive || !fish.infection) return { ok: false, message: '这条鱼当前无需感染护理' };
+  if (fish.infection.cared) return { ok: false, message: '这条鱼已在护理中' };
+  fish.infection.cared = true;
+  const message = `已开始护理${fish.label}，请留意恢复情况。`;
+  record(state, message);
+  return { ok: true, message };
 }
 
 export function removeAnimal(state, id) {
@@ -351,6 +361,8 @@ export function getAssessment(state) {
   if (w.nitrate > 15) return { level: 'warning', label: '需要换水', message: '硝酸盐正在积累；水草吸收有限，请定期换水。' };
   if (w.temperature < 21 || w.temperature > 28) return { level: 'warning', label: '温度不适', message: '将水温维持在混养生物能共同适应的范围。' };
   if (w.ph < 6.5 || w.ph > 8) return { level: 'warning', label: '酸碱度偏离', message: '检查水质与过滤，适量换水，避免剧烈调整。' };
+  const sick = state.animals.filter(a => a.alive && a.infection);
+  if (sick.length) return { level: 'warning', label: '鱼儿感染', message: `${sick.length} 条鱼有感染症状，到生物面板查看个体并护理。` };
   if (state.animals.some(a => a.alive && a.health < 60)) return { level: 'warning', label: '生物虚弱', message: '水质恢复后健康会逐步恢复，检查饥饿与生物负载。' };
   if (state.animals.some(a => a.alive && a.hunger > 80)) return { level: 'warning', label: '需要投喂', message: '生物已经饥饿，适量投喂，避免一次投入过多。' };
   return { level: 'good', label: '生态稳定', message: '过滤、溶氧和氮循环正常。少量投喂，保持观察。' };
@@ -444,8 +456,13 @@ function integrate(state, dt) {
       '硝酸盐长期积累': Math.max(0, w.nitrate - 25) * 0.008,
       '温度不适': Math.max(0, spec.temperature[0] - w.temperature, w.temperature - spec.temperature[1]) ** 1.6 * 0.18,
       '酸碱度不适': Math.max(0, spec.ph[0] - w.ph, w.ph - spec.ph[1]) ** 1.7 * 0.65,
-      '长期饥饿': Math.max(0, a.hunger - 92) * 0.055,
+      '长期饥饿': Math.max(0, a.hunger - 92) * (spec.type === 'fish' ? .30 : .055),
     };
+    if (a.infection) {
+      const label = INFECTIONS[a.infection.kind].label;
+      stressors[label] = advanceInfection(a, w, dt);
+      if (!a.infection) record(state, `${a.label}的${label}已康复。`);
+    }
     const damage = Object.values(stressors).reduce((sum, v) => sum + v, 0) * spec.sensitivity;
     a.stress = clamp(damage / 8, 0, 1);
     const healing = damage < 0.08 && a.hunger < 75 ? 0.6 : 0;
@@ -455,6 +472,7 @@ function integrate(state, dt) {
     a.health = clamp(a.health + (healing - damage) * dt, 0, healthCeiling);
     if (a.health <= 0) {
       a.alive = false;
+      if (a.infection) a.infection = null;
       a.deathHours = state.elapsedHours + dt;
       a.corpseMass = a.mass;
       a.behavior = 'dead'; a.targetFoodId = null;
@@ -466,6 +484,8 @@ function integrate(state, dt) {
     }
   }
   state.elapsedHours += dt;
+  const sick = startScheduledInfection(state, SPECIES);
+  if (sick) record(state, `${sick.label}出现${INFECTIONS[sick.infection.kind].label}，可打开个体档案护理。`, 'warning');
 }
 
 /** Advance by simulated hours, with five-minute integration substeps. */
@@ -491,6 +511,41 @@ export function advanceSimulation(state, hours) {
   return state;
 }
 
+// The first lifecycle model stored maturity and lifespan in real-world fish years.
+// Its valid lifespans are disjoint from the new game ranges, even with individual variation.
+const legacyLifeDays = {
+  neon: [180, 1825], guppy: [75, 900], angelfish: [300, 2920],
+  zebra: [90, 1460], harlequin: [150, 1825],
+};
+
+function restoreFishAge(fish, saved, spec) {
+  const legacy = legacyLifeDays[fish.species];
+  const maturity = spec.maturityDays * 24, life = spec.lifespanDays * 24;
+  const oldLife = saved.lifespanHours;
+  const legacyLife = legacy ? legacy[1] * 24 : 0;
+  if (legacy && Number.isFinite(saved.lifeAgeHours) && Number.isFinite(oldLife) &&
+      oldLife >= legacyLife * .85 && oldLife <= legacyLife * 1.15) {
+    const age = clamp(saved.lifeAgeHours, 0, 1e7);
+    const oldMaturity = legacy[0] * 24;
+    fish.lifespanHours = life * (oldLife / legacyLife);
+    // Preserve progress within each stage, including the senior's current health ceiling.
+    if (age < oldMaturity) {
+      fish.lifeAgeHours = maturity * (age / oldMaturity);
+    } else if (age < .8 * oldLife) {
+      const adultProgress = (age - oldMaturity) / (.8 * oldLife - oldMaturity);
+      fish.lifeAgeHours = maturity + adultProgress * (.8 * fish.lifespanHours - maturity);
+    } else {
+      const seniorHours = (age - .8 * oldLife) / oldLife * fish.lifespanHours;
+      fish.lifeAgeHours = .8 * fish.lifespanHours + seniorHours;
+    }
+    return;
+  }
+  fish.lifespanHours = numeric(oldLife, fish.lifespanHours, life * .85, life * 1.15);
+  // Before v0.7.0 only residence time was saved. Give established adults time to live.
+  const estimatedAge = Math.min(maturity + fish.ageHours, fish.lifespanHours * .6);
+  fish.lifeAgeHours = numeric(saved.lifeAgeHours, estimatedAge, 0, 1e7);
+}
+
 /** Invalid/corrupt saves become safe defaults; valid deaths and empty tanks persist. */
 export function restoreState(raw) {
   const base = createInitialState();
@@ -500,6 +555,8 @@ export function restoreState(raw) {
   }
   if (!data || typeof data !== 'object' || data.version !== 1) return base;
   base.elapsedHours = numeric(data.elapsedHours, 0, 0, 1e7);
+  const legacySeed = Math.floor(seedFromId(data.animals?.[0]?.id || base.elapsedHours) * 2 ** 32);
+  base.infectionClock = restoreInfectionClock(data.infectionClock, base.elapsedHours, legacySeed);
   base.speed = numeric(data.speed, 1, 0.1, 3600);
   base.paused = data.paused === true;
   base.volumeLiters = numeric(data.volumeLiters, 60, 10, 500);
@@ -536,14 +593,8 @@ export function restoreState(raw) {
       restored.size = numeric(a.size, defaultSize, .6, 1.5);
       const defaultMass = spec.mass * restored.size ** (legacyBody ? 2 : 3);
       restored.mass = numeric(a.mass, defaultMass, .03, 3);
-      if (fish) {
-        restored.lifespanHours = numeric(a.lifespanHours, restored.lifespanHours, spec.lifespanDays * 24 * .85, spec.lifespanDays * 24 * 1.15);
-        // v0.6.4 tracked time in the tank only. Preserve its body and give each
-        // established resident adult years ahead, even in a very old aquarium.
-        const legacyAge = Math.min(spec.maturityDays * 24 + restored.ageHours, restored.lifespanHours * .6);
-        restored.lifeAgeHours = numeric(a.lifeAgeHours, legacyAge, 0, 1e7);
-        restored.growthReserve = numeric(a.growthReserve, 0, 0, restored.mass * .05);
-      }
+      if (fish) restoreFishAge(restored, a, spec);
+      if (fish && restored.alive) restored.infection = restoreInfection(a.infection);
       restored.metabolism = numeric(a.metabolism,restored.metabolism,.65,1.5);
       for (const [axis,min,max] of [['x',-3.65,3.65],['y',.15,4.05],['z',-1.65,1.65]]) restored.position[axis] = numeric(a.position?.[axis],restored.position[axis],min,max);
       for (const axis of ['x','y','z']) restored.velocity[axis] = numeric(a.velocity?.[axis],restored.velocity[axis],-4,4);

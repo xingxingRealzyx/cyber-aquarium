@@ -100,6 +100,7 @@ function step(state,dt) {
     if (fish) {
       desiredSpeed = food ? .62 + a.hunger * .014 : cruiseSpeed;
       if (a.hunger < 8) desiredSpeed *= .62;
+      if (a.infection) desiredSpeed *= 1 - .5 * a.infection.severity;
     }
     const speed = desiredSpeed * health * (.9 + a.metabolism * .1);
     // Arrive without orbiting the target; feeding is still guarded by contact.

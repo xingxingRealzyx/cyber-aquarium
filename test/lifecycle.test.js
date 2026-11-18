@@ -9,12 +9,48 @@ import {
 function emptyTank() {
   const tank = createInitialState();
   tank.animals = [];
+  tank.infectionClock.nextAtHours = Number.MAX_SAFE_INTEGER;
   return tank;
 }
 
 function reload(tank) {
   return restoreState(JSON.stringify(tank));
 }
+
+test('stocked juveniles reach maturity within a play session, with distinct individual lifespans', () => {
+  const tank = emptyTank();
+  for (const [name, spec] of Object.entries(SPECIES).filter(([, spec]) => spec.type === 'fish')) {
+    const { animal: fish } = addAnimal(tank, name);
+    // At the default 60x speed, a simulation hour takes one minute of play.
+    const minutesToMaturity = spec.maturityDays * 24 - fish.lifeAgeHours;
+    assert.ok(minutesToMaturity >= 9.9 && minutesToMaturity <= 27, spec.name);
+    const minutesToOldAgeDeath = fish.lifespanHours - fish.lifeAgeHours;
+    assert.ok(minutesToOldAgeDeath >= 73 && minutesToOldAgeDeath <= 267, spec.name);
+    if (name === 'guppy') assert.ok(minutesToOldAgeDeath <= 106);
+    if (name === 'angelfish') assert.ok(minutesToOldAgeDeath >= 187);
+  }
+});
+
+test('a regularly fed guppy grows visibly and completes its full life on the new clock', () => {
+  const tank = emptyTank();
+  const { animal: fish } = addAnimal(tank, 'guppy');
+  const initialSize = fish.size;
+  const initialAge = fish.lifeAgeHours;
+  const stages = new Set();
+  for (let hour = 0; hour < 108 && fish.alive; hour += 2) {
+    if (hour % 12 === 0) {
+      feed(tank, .012);
+      advanceBehavior(tank, 30);
+    }
+    stages.add(fishLifeStage(fish));
+    if (fishLifeStage(fish) === 'adult') assert.ok(fish.size > initialSize * 1.15);
+    advanceSimulation(tank, 2);
+  }
+  assert.deepEqual([...stages], ['juvenile', 'adult', 'senior']);
+  assert.ok(fish.bites > 0);
+  assert.equal(fish.causeOfDeath, '自然衰老');
+  assert.ok(Math.abs(fish.deathHours - (fish.lifespanHours - initialAge)) <= 1 / 12 + 1e-8);
+});
 
 test('a fed juvenile gains size and mass, and resumes growing from its saved state', () => {
   const tank = emptyTank();
@@ -91,6 +127,33 @@ test('an established fish migrates without losing its former age, body, or remai
   const restored = reload(tank).animals[0];
   assert.equal(restored.lifeAgeHours, fish.lifeAgeHours);
   assert.equal(restored.lifespanHours, fish.lifespanHours);
+});
+
+test('year-scale saves retain the progress in each life stage and keep existing remains', () => {
+  const oldMaturity = 75 * 24;
+  const oldLife = 900 * 24 * 1.08;
+  const oldAges = [oldMaturity / 2, (oldMaturity + oldLife * .8) / 2, oldLife * .9, oldLife];
+  const residents = oldAges.map((lifeAgeHours, i) => ({
+    id: `old-${i}`, species: 'guppy', seed: .35, ageHours: 180, health: i === 3 ? 0 : 75,
+    alive: i !== 3, hunger: 40, size: .96, mass: .6, lifeAgeHours, lifespanHours: oldLife,
+    ...(i === 3 && { deathHours: 190, corpseMass: .31, causeOfDeath: '自然衰老' }),
+  }));
+  const tank = restoreState({ version: 1, elapsedHours: 200, animals: residents });
+  const maturity = SPECIES.guppy.maturityDays * 24;
+  const life = SPECIES.guppy.lifespanDays * 24 * 1.08;
+  const expectedAges = [maturity / 2, (maturity + life * .8) / 2, life * .9, life];
+  const stages = ['juvenile', 'adult', 'senior', 'senior'];
+  const again = reload(tank);
+  for (const [i, fish] of tank.animals.entries()) {
+    assert.equal(fishLifeStage(fish), stages[i]);
+    assert.ok(Math.abs(fish.lifeAgeHours - expectedAges[i]) < 1e-9);
+    assert.ok(Math.abs(fish.lifespanHours - life) < 1e-9);
+    for (const key of ['alive', 'health', 'size', 'mass', 'ageHours']) assert.equal(fish[key], residents[i][key]);
+    assert.equal(again.animals[i].lifeAgeHours, fish.lifeAgeHours);
+    assert.equal(again.animals[i].lifespanHours, fish.lifespanHours);
+  }
+  const remains = again.animals[3];
+  for (const key of ['deathHours', 'corpseMass', 'causeOfDeath']) assert.equal(remains[key], residents[3][key]);
 });
 
 test('a dead fish rises over time, stays at the surface, and can be netted after reloading', () => {
