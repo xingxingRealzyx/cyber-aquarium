@@ -54,7 +54,13 @@ app.innerHTML = `
   <div id="hint" class="intro-hint">点击鱼看档案 · 拖动旋转<span>按住底部「移动」调整桌面位置</span></div>
   <aside id="panel" class="panel interactive" aria-label="鱼缸管理" hidden>
     <header><div><span class="eyebrow">YOUR LIVING AQUARIUM</span><h1>照料这一方水</h1></div><button class="icon-btn" data-action="close" aria-label="关闭面板">${icon('close')}</button></header>
-    <nav class="tabs" aria-label="管理分类"><button data-tab="water" class="active">水环境</button><button data-tab="life">生物</button><button data-tab="scenery">造景</button><button data-tab="journal">日志</button></nav>
+    <nav class="tabs" aria-label="管理分类">
+      <button data-tab="water" class="active" aria-current="page">水环境</button>
+      <button data-tab="life">生物</button>
+      <button data-tab="scenery">造景</button>
+      <button data-tab="journal">日志</button>
+      <button data-tab="settings">设置</button>
+    </nav>
     <div id="panel-content" class="panel-content"></div>
     <footer><span id="render-stat">WebGL 2</span><span>60 L · 淡水生态</span></footer>
   </aside>
@@ -161,7 +167,7 @@ function applyUpdateState(value) {
   if (!value) return;
   updateState = value;
   if (value.phase === 'installing') persist();
-  if (panelOpen && activeTab === 'journal') updatePanel();
+  if (panelOpen && activeTab === 'settings') updatePanel();
 }
 async function runUpdate(install) {
   if (install) persist();
@@ -172,27 +178,34 @@ async function runUpdate(install) {
   }
 }
 function journalPanel() {
-  return `<div class="time-card"><span class="eyebrow">AQUARIUM TIME</span><strong>${timeLabel(state.elapsedHours)}</strong><p>游动与生态时间独立，陪伴按自己的节奏。</p></div>
+  return `<div class="section-label"><span>最近事件</span><span>${timeLabel(state.elapsedHours)}</span></div>
+    <div class="event-list">${state.events.slice(0,15).map(e=>`<article class="event ${escape(e.type)}"><span></span><div><small>${timeLabel(e.time)}</small><p>${escape(e.message)}</p></div></article>`).join('')||'<p class="micro-note">暂无鱼缸事件</p>'}</div>`;
+}
+function settingsPanel() {
+  return `${updateControls()}
     <div class="section-label"><span>生态时间流速</span><button class="text-btn" data-action="pause">${state.paused?'继续模拟':'暂停模拟'}</button></div>
     <div class="speed-options">${[[1,'实时'],[60,'60×'],[3600,'3600×']].map(([v,label])=>`<button data-speed="${v}" class="${state.speed===v?'selected':''}">${label}</button>`).join('')}</div>
     <p class="micro-note">${state.speed===1?'现实 1 小时 = 缸内 1 小时。':state.speed===60?'现实 1 秒 = 缸内 1 分钟。':'现实 1 秒 = 缸内 1 小时；请留意水质和饥饿。'}${state.paused?' 当前已暂停生态演化。':''}关闭应用后生态暂停。</p>
-    ${updateControls()}
     <div class="section-label"><span>桌面摆放</span><span>${desktop?'原生透明桌面':'浏览器预览'}</span></div>
     <div class="desktop-actions"><button class="secondary-btn ${pinned?'selected':''}" data-action="pin">${icon('pin')}${pinned?'已置顶':'置顶显示'}</button><button class="secondary-btn" data-action="compact">${icon('expand')}${compact?'标准大小':'小巧模式'}</button></div>
     <button class="wide-btn" data-action="reset-view">${icon('rotate')} 重置观察角度</button>
     ${desktop?`<button class="wide-btn" data-action="click-through">穿透鼠标 · 在${trayLocation}鱼图标中恢复</button>`:''}
-    <div class="section-label"><span>生态日志</span><span>自动保存</span></div>
-    <div class="event-list">${state.events.slice(0,15).map(e=>`<article class="event ${escape(e.type)}"><span></span><div><small>${timeLabel(e.time)}</small><p>${escape(e.message)}</p></div></article>`).join('')||'<p class="micro-note">一方新的小世界，正在慢慢醒来。</p>'}</div>
     <details class="model-note"><summary>关于这只鱼缸</summary><p>鱼缸由 GPU 实时渲染。水质遵循简化的氮循环、溶氧和温度模型；毒性随 pH 和温度变化，健康会累积损伤，鱼也会因缺氧、毒性与饥饿死亡。</p><p>每只生物都有独立状态；饲料需要实际接触才能被吃到。游动节奏保持自然，生态时间可独立加速。</p><p>这是生态模拟原型，参数经过玩法标定，并非真实养鱼的水质预测工具。当前不模拟疾病、繁殖与品种间攻击。进度仅保存在此设备。</p><p>所有含氮读数统一以氮计，mg N/L。开关灯为手动，默认成熟滤菌缸。</p></details>`;
 }
+const panelViews = {
+  water: waterPanel,
+  life: lifePanel,
+  scenery: () => sceneryPanel(state, expandedKind, escape),
+  journal: journalPanel,
+  settings: settingsPanel,
+};
 function updatePanel() {
   const assessment=getAssessment(state);
   $('#health-dot').className=assessment.level;
   $('#render-stat').textContent=`WebGL 2 · ${Math.round(stats.fps||0)} FPS`;
   if (panelOpen && !(document.activeElement?.type==='range' && document.activeElement.matches(':active'))) {
     const content=$('#panel-content'), scroll=content.scrollTop, focused=document.activeElement;
-    const html = activeTab === 'scenery' ? sceneryPanel(state, expandedKind, escape)
-      : activeTab === 'water' ? waterPanel() : activeTab === 'life' ? lifePanel() : journalPanel();
+    const html = panelViews[activeTab]();
     if(html !== lastPanelHTML && !(pointerDown && content.contains(focused))) {
       const focusKey = content.contains(focused) && focused.getAttributeNames().find(name => name.startsWith('data-'));
       const focusSelector = focusKey ? `[${focusKey}="${CSS.escape(focused.getAttribute(focusKey))}"]`
@@ -209,8 +222,14 @@ function openPanel(tab=activeTab) {
   const changed = activeTab !== tab;
   panelOpen=true; activeTab=tab;
   $('#panel').hidden=false;
+  $('#panel h1').textContent = tab === 'settings' ? '鱼缸设置' : tab === 'journal' ? '生态日志' : '照料这一方水';
   document.body.classList.add('panel-open','hovering');
-  document.querySelectorAll('.tabs [data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+  for (const button of document.querySelectorAll('.tabs [data-tab]')) {
+    const active = button.dataset.tab === tab;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
   updatePanel();
   if(changed) $('#panel-content').scrollTop=0;
   updatePointerPosition(lastPointer);
@@ -260,7 +279,7 @@ function perform(action) {
   else if(action==='water') openPanel('water');
   else if(action==='life') openPanel('life');
   else if(action==='scenery') openPanel('scenery');
-  else if(action==='settings') openPanel('journal');
+  else if(action==='settings') openPanel('settings');
   else if(action==='check-update' || action==='install-update') return void runUpdate(action==='install-update');
   else if(action==='feed') { const result=feed(state); notify(result.ok?(state.paused?'饲料已入水 · 继续模拟后鱼会进食':'饲料已入水 · 饥饿的鱼会主动靠近进食'):result.message); }
   else if(action==='change-water') { changeWater(state,.25); notify('已更换 25% 水 · 使用等温、除氯新水'); }
@@ -303,7 +322,7 @@ window.addEventListener('keydown',e=>{
   if(e.code==='Space'&&!['INPUT','BUTTON','SUMMARY'].includes(e.target.tagName)){e.preventDefault();perform('pause');notify(state.paused?'生态演化已暂停':'生态演化已继续');}
 });
 $('#aquarium').addEventListener('dblclick',()=>perform('reset-view'));
-window.addEventListener('contextmenu',e=>{e.preventDefault();openPanel('journal');});
+window.addEventListener('contextmenu',e=>{e.preventDefault();openPanel('settings');});
 function updatePointerPosition({x,y}, sync=false) {
   if(!Number.isFinite(x)||!Number.isFinite(y)) return;
   lastPointer={x,y};
@@ -369,7 +388,7 @@ window.addEventListener('mouseout',e=>{
 window.addEventListener('beforeunload',persist);
 // Persist on hide without treating time spent closed as unobserved simulation.
 document.addEventListener('visibilitychange',()=>{if(document.hidden)persist();});
-desktop?.onSettings?.(()=>openPanel('journal'));
+desktop?.onSettings?.(()=>openPanel('settings'));
 function placeDesktopAquarium() {
   if(!desktopLayout) return;
   renderer?.setDesktopLayout(desktopLayout);

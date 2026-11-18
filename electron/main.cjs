@@ -191,7 +191,7 @@ function rebuildTrayMenu() {
     { type: 'separator' },
     { label: '显示鱼缸 / 恢复操作', click: () => revealAquarium() },
     { label: '隐藏鱼缸', click: () => aquariumWindow?.hide() },
-    { label: '鱼缸管理…', click: () => revealAquarium(true) },
+    { label: '鱼缸设置…', click: () => revealAquarium(true) },
     { type: 'separator' },
     { label: '置于其他窗口之上', type: 'checkbox', checked: preferences.alwaysOnTop, click: item => setAlwaysOnTop(item.checked) },
     { label: '鼠标穿透（从此菜单恢复）', type: 'checkbox', checked: manualClickThrough, click: item => setManualClickThrough(item.checked) },

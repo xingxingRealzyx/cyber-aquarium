@@ -54,10 +54,26 @@ try{
   await page.locator('[data-equipment="aerator"]').click();
   assert.equal(await page.evaluate(()=>window.aquariumDiagnostics.state.equipment.aerator),false);
   await page.getByRole('button',{name:'鱼缸设置',exact:true}).click();
+  const activeTab = page.locator('.tabs .active');
+  assert.equal(await activeTab.getAttribute('data-tab'), 'settings');
+  await page.setViewportSize({width:720,height:520});
+  const tabs = page.locator('.tabs');
+  assert.ok(await tabs.evaluate(nav => nav.scrollWidth <= nav.clientWidth), 'all tabs fit in compact mode');
+  for (const tab of ['water','life','scenery','settings','journal']) {
+    await tabs.locator(`[data-tab="${tab}"]`).click();
+    assert.equal(await activeTab.getAttribute('data-tab'), tab);
+  }
+  assert.ok(await page.locator('.event-list .event').count() > 0);
+  assert.equal(await page.locator('#panel-content').locator('[data-speed], [data-action="pin"], [data-action="check-update"]').count(), 0);
+  await page.keyboard.press('Escape');
+  await page.mouse.click(360, 230, {button:'right'});
+  assert.equal(await activeTab.getAttribute('data-tab'), 'settings');
+  assert.equal(await page.locator('.event-list').count(), 0);
   await page.locator('[data-speed="3600"]').click();
   await page.locator('[data-action="pause"]').click();
   const saved=await page.evaluate(()=>window.aquariumDiagnostics.state);
   assert.equal(saved.speed,3600); assert.equal(saved.paused,true);
+  await page.setViewportSize({width:1040,height:760});
   await page.reload();
   await page.waitForFunction(()=>window.aquariumDiagnostics?.stats.fps>0);
   const restored=await page.evaluate(()=>window.aquariumDiagnostics.state);
@@ -75,7 +91,7 @@ try{
   await page.getByRole('button',{name:'查看水质',exact:true}).click();
   await page.screenshot({path:'artifacts/aquarium-controls.png',omitBackground:true});
   assert.deepEqual(errors,[],'no JavaScript or shader errors');
-  const report={passed:true,checks:['transparent background','WebGL renderer','hidden controls','feeding','add fish and plants','edit individual plants and hardscape','individual inspection','water change','equipment controls','clock and pause','persistence'],stats:await page.evaluate(()=>window.aquariumDiagnostics.stats),errors};
+  const report={passed:true,checks:['transparent background','WebGL renderer','hidden controls','feeding','add fish and plants','edit individual plants and hardscape','individual inspection','water change','equipment controls','compact tabs','journal and settings navigation','clock and pause','persistence'],stats:await page.evaluate(()=>window.aquariumDiagnostics.stats),errors};
   await writeFile('artifacts/smoke-browser.json',JSON.stringify(report,null,2));
   console.log(JSON.stringify(report,null,2));
 }finally{await browser.close();}
