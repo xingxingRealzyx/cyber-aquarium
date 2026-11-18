@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { access, mkdir, writeFile } from 'node:fs/promises';
+import { TOYS } from '../src/simulation.js';
 const candidates=[process.env.CHROMIUM_PATH,'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',path.join(homedir(),'Library/Caches/ms-playwright/chromium-1194/chrome-mac/Chromium.app/Contents/MacOS/Chromium')].filter(Boolean);
 let executablePath;
 for(const candidate of candidates){try{await access(candidate);executablePath=candidate;break;}catch{}}
@@ -96,13 +97,21 @@ try{
   await addDuck.click();
   await addDuck.click();
   await page.locator('[data-add-toy="diver"]').click();
-  await page.waitForFunction(() => window.aquariumDiagnostics.screenToys.length === 3);
+  await page.locator('[data-add-toy="swimRing"]').click();
+  await page.waitForFunction(() => window.aquariumDiagnostics.screenToys.length === 4);
+  const ring = await page.evaluate(() => window.aquariumDiagnostics.state.toys.find(t => t.kind === 'swimRing'));
+  const colorName = TOYS.swimRing.colors[ring.color];
+  assert.ok(colorName, 'the placed swim ring has a color from the palette');
+  const ringListButton = page.locator('[data-show-kind="swimRing"]');
+  const removeRing = page.locator(`.placed-items [data-remove-toy="${ring.id}"]`);
+  await ringListButton.click();
+  assert.ok((await removeRing.getAttribute('aria-label')).includes(colorName));
   const firstDuck = await page.evaluate(() => window.aquariumDiagnostics.state.toys[0].id);
   await page.locator('[data-show-kind="duck"]').click();
   await page.locator(`.placed-items [data-remove-toy="${firstDuck}"]`).click();
   await page.waitForFunction(id => {
     const toys = window.aquariumDiagnostics.screenToys;
-    return toys.length === 2 && toys.every(t => t.id !== id && t.visible);
+    return toys.length === 3 && toys.every(t => t.id !== id && t.visible);
   }, firstDuck);
   const beforeDrift = await page.evaluate(() => window.aquariumDiagnostics.screenToys);
   await page.waitForFunction(previous => window.aquariumDiagnostics.screenToys.every(toy => {
@@ -112,6 +121,7 @@ try{
   const floating = await page.evaluate(() => window.aquariumDiagnostics.screenToys);
   const waterline = floating.find(t => t.kind === 'duck').world.y;
   assert.ok(Math.abs(waterline - 4.14) < 0.08, 'duck sits at the visible waterline');
+  assert.ok(Math.abs(floating.find(t => t.id === ring.id).world.y - 4.14) < 0.08, 'swim ring floats at the waterline');
   assert.ok(floating.find(t => t.kind === 'diver').world.y < waterline, 'diver is submerged');
   assert.equal((await page.evaluate(()=>window.aquariumDiagnostics.state.animals.length)),13);
   assert.equal((await page.evaluate(()=>window.aquariumDiagnostics.state.plants.length)),10);
@@ -165,9 +175,19 @@ try{
   assert.equal(restored.speed,3600); assert.equal(restored.paused,true);
   assert.equal(restored.equipment.aerator,false);
   assert.equal(restored.animals[0].id,saved.animals[0].id);
+  await page.mouse.click(520, 380, {button:'right'});
+  await page.locator('[data-tab="scenery"]').click();
+  await ringListButton.click();
+  assert.ok((await removeRing.getAttribute('aria-label')).includes(colorName));
+  await removeRing.click();
+  await page.waitForFunction(() => {
+    const toys=window.aquariumDiagnostics.screenToys;
+    return toys.length===2 && toys.every(t => t.kind !== 'swimRing');
+  });
   await page.keyboard.press('Escape');
   await page.mouse.move(1,1);
-  await page.waitForTimeout(8000);
+  await page.waitForFunction(() => document.querySelector('#hint').classList.contains('dismissed') &&
+    getComputedStyle(document.querySelector('.dock-wrap')).opacity === '0');
   await mkdir('artifacts',{recursive:true});
   await page.screenshot({path:'artifacts/aquarium-transparent.png',omitBackground:true});
   await page.mouse.move(500,400);

@@ -1,5 +1,5 @@
 import { EllipseCurve, Vector2, Vector3 } from 'three';
-import { MAX_TOYS } from './simulation.js';
+import { MAX_TOYS, TOYS } from './simulation.js';
 import { sampleWaterSurface } from './water-light.js';
 
 // Arc-length sampling keeps even the tight ends of the circulation loop wide
@@ -9,16 +9,18 @@ const point = new Vector2(), wave = new Vector3();
 const tau = 2 * Math.PI;
 
 export function poseToy(model, toy, time, waterLevel, driftFloor) {
-  const duck = toy.kind === 'duck';
-  const phase = time / (duck ? 139 : 151) + toy.slot * 5 / MAX_TOYS + (duck ? .29 : .19);
+  const onSurface = TOYS[toy.kind].surface;
+  const slot = onSurface ? (toy.surfaceSlot ?? toy.slot) : toy.slot;
+  const phase = time / (onSurface ? 139 : 151) + slot * 5 / MAX_TOYS + (onSurface ? .29 : .19);
   currentLoop.getPointAt(phase - Math.floor(phase), point);
   const x = point.x + .18 * Math.sin(time * .081 + point.y * .7);
   const z = point.y + .21 * Math.sin(time * .065 + point.x * .73);
-  const swirl = tau * phase + .32 * Math.sin(time * .12 + toy.slot);
-  if (duck) {
+  const swirl = tau * phase + .32 * Math.sin(time * .12 + slot);
+  if (onSurface) {
     sampleWaterSurface(x, z, time, wave);
     model.position.set(x, waterLevel + wave.x, z);
-    model.rotation.set(-Math.atan(wave.z), -.25 + .8 * Math.sin(swirl), Math.atan(wave.y), 'ZXY');
+    const yaw = toy.kind === 'swimRing' ? swirl : -.25 + .8 * Math.sin(swirl);
+    model.rotation.set(-Math.atan(wave.z), yaw, Math.atan(wave.y), 'ZXY');
     return;
   }
 

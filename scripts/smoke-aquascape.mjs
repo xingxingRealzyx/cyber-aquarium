@@ -49,6 +49,30 @@ try {
     await page.evaluate(view => window.renderScene(view),view);
     await page.screenshot({path:'artifacts/'+stage+'-'+view+'.png'});
   }
+  const beforeToys = await page.evaluate(() => {
+    const {aquarium, state, sim} = window.inspectScene;
+    window.renderScene('default', 'low');
+    const memory = {...aquarium.renderer.info.memory};
+    for (const kind of ['duck', 'diver', 'swimRing']) sim.addToy(state, kind);
+    window.renderScene('default', 'low');
+    return memory;
+  });
+  const toyMaps = ['pvc', 'rubber', 'canvas', 'copper'].flatMap(finish =>
+    ['color', 'normal', 'rough'].map(channel => `/toys/${finish}-${channel}.webp`));
+  await page.waitForFunction(({beforeToys, toyMaps}) => {
+    const loaded = new Set(performance.getEntriesByType('resource')
+      .filter(entry => entry.initiatorType === 'img').map(entry => new URL(entry.name).pathname));
+    if (!toyMaps.every(file => loaded.has(file))) return false;
+    window.renderScene('default', 'low');
+    return window.inspectScene.aquarium.renderer.info.memory.textures >= beforeToys.textures + toyMaps.length;
+  }, {beforeToys, toyMaps});
+  const afterToys = await page.evaluate(() => {
+    const {aquarium, state, sim} = window.inspectScene;
+    for (const toy of [...state.toys]) sim.removeToy(state, toy.id);
+    window.renderScene('default', 'low');
+    return {...aquarium.renderer.info.memory};
+  });
+  assert.deepEqual(afterToys, beforeToys, 'removing all three toys releases their textures and meshes');
   const metrics=await page.evaluate(async () => {
     const {aquarium,state,sim}=window.inspectScene;
     const renderAndWait=async () => {
@@ -64,12 +88,14 @@ try {
       const {item:wood}=sim.addHardscape(state,'wood');
       const {item:duck}=sim.addToy(state,'duck');
       const {item:diver}=sim.addToy(state,'diver');
+      const {item:ring}=sim.addToy(state,'swimRing');
       await renderAndWait();
       sim.removePlant(state,plant.id);
       sim.removeHardscape(state,stone.id);
       sim.removeHardscape(state,wood.id);
       sim.removeToy(state,duck.id);
       sim.removeToy(state,diver.id);
+      sim.removeToy(state,ring.id);
       await renderAndWait();
     }
     state.equipment.light=false;

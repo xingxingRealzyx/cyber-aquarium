@@ -4,7 +4,7 @@ import { advanceBehavior } from '../src/behavior.js';
 import {
   createInitialState, advanceSimulation, feed, changeWater, getAssessment, restoreState, ammoniaFraction,
   addAnimal, removeAnimal, removeDead, addPlant, removePlant, addHardscape, removeHardscape, MAX_HARDSCAPE,
-  addToy, removeToy, MAX_TOYS,
+  addToy, removeToy, MAX_TOYS, TOYS,
 } from '../src/simulation.js';
 
 const totalNitrogen = s => s.water.ammonia + s.water.nitrite + s.water.nitrate;
@@ -84,6 +84,53 @@ test('invalid or excess toys cannot exceed capacity or reuse an occupied slot', 
   assert.equal(removeToy(state, 'suit').ok, true);
   assert.equal(addToy(state, 'stone').ok, false);
   assert.equal(addToy(state, 'diver').item.slot, 1);
+});
+
+test('swim rings get individual colors on placement and keep them after a reload', t => {
+  const state = createInitialState();
+  const colors = Object.keys(TOYS.swimRing.colors);
+  const random = t.mock.method(Math, 'random', () => 0);
+  const first = addToy(state, 'swimRing').item;
+  random.mock.mockImplementation(() => .9999);
+  const second = addToy(state, 'swimRing').item;
+  random.mock.restore();
+  assert.equal(first.color, colors[0]);
+  assert.equal(second.color, colors.at(-1));
+  assert.notEqual(first.color, second.color);
+  assert.deepEqual(restoreState(JSON.stringify(state)).toys, [first, second]);
+});
+
+test('mixed ducks and rings keep distinct water-surface slots when others are removed', () => {
+  const state = createInitialState();
+  const surfaceSlot = item => item.surfaceSlot ?? item.slot;
+  for (let i = 0; i < MAX_TOYS; i++) addToy(state, i % 2 ? 'swimRing' : 'duck');
+  assert.equal(new Set(state.toys.map(surfaceSlot)).size, MAX_TOYS);
+  assert.deepEqual(state.toys.slice(0, 2).map(item => item.slot), [0, 0]);
+  assert.equal(addToy(state, 'swimRing').ok, false);
+  const vacated = state.toys[2];
+  removeToy(state, vacated.id);
+  const restored = restoreState(JSON.stringify(state));
+  assert.deepEqual(restored.toys, state.toys);
+  assert.equal(surfaceSlot(addToy(restored, 'swimRing').item), surfaceSlot(vacated));
+});
+
+test('loading repairs invalid ring colors and surface slots deterministically', () => {
+  const toys = [
+    {kind:'duck', id:'old-duck', slot:0},
+    {kind:'diver', id:'diver', slot:0, color:'#ff0000', surfaceSlot:9},
+    {kind:'swimRing', id:'a', slot:0, color:['#ef684e'], surfaceSlot:0},
+    {kind:'swimRing', id:'b', slot:1, surfaceSlot:99},
+    {kind:'swimRing', id:'c', slot:2, color:'#369CD9'},
+  ];
+  const load = () => restoreState({version:1, toys}).toys;
+  const repaired = load();
+  assert.deepEqual(repaired, load());
+  assert.deepEqual(repaired[0], toys[0]);
+  assert.deepEqual(repaired[1], {kind:'diver', id:'diver', slot:0});
+  assert.equal(repaired[4].color, '#369cd9');
+  for (const ring of repaired.slice(2)) assert.ok(Object.hasOwn(TOYS.swimRing.colors, ring.color));
+  const surface = repaired.filter(item => item.kind !== 'diver');
+  assert.equal(new Set(surface.map(item => item.surfaceSlot ?? item.slot)).size, surface.length);
 });
 
 test('removing an individual preserves its tankmates and survives a reload', () => {

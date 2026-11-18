@@ -10,7 +10,8 @@ export function sceneryPanel(state, expandedKind, escape) {
       const last = placed.at(-1);
       const details = expanded && placed.length ? `<ul class="placed-items">
         ${placed.map(item => {
-          const label = `${entry.name} #${String(item.slot + 1).padStart(2, '0')}`;
+          const colorName = entry.colors?.[item.color];
+          const label = `${entry.name} #${String(item.slot + 1).padStart(2, '0')}${colorName ? ' · ' + colorName : ''}`;
           return `<li><span>${label}</span><button data-remove-${category}="${escape(item.id)}" aria-label="移出${label}">移出</button></li>`;
         }).join('')}</ul>` : '';
       return `<div class="scenery-row">
@@ -28,5 +29,5 @@ export function sceneryPanel(state, expandedKind, escape) {
     + section('石与沉木', state.hardscape, HARDSCAPE, 'hardscape', MAX_HARDSCAPE)
     + '<p class="micro-note">点品种名称可按编号移出。水草在光照下吸收硝酸盐并产氧。</p>'
     + section('漂浮玩具', state.toys, TOYS, 'toy', MAX_TOYS)
-    + '<p class="micro-note">小黄鸭浮在水面。潜水员具有中性浮力，随水流上下漂移。</p>';
+    + '<p class="micro-note">小黄鸭和小游泳圈随水面起伏。游泳圈放入时随机选色。潜水员具有中性浮力，随水流上下漂移。</p>';
 }

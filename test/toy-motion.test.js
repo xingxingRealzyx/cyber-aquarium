@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Object3D, Vector3 } from 'three';
 import { advanceBehavior } from '../src/behavior.js';
-import { createInitialState, MAX_TOYS, restoreState, substrateHeight } from '../src/simulation.js';
+import { addToy, createInitialState, MAX_TOYS, removeToy, restoreState, substrateHeight } from '../src/simulation.js';
 import { poseToy } from '../src/toy-motion.js';
 import { sampleWaterSurface } from '../src/water-light.js';
 
@@ -18,6 +18,38 @@ test('floating ducks follow the surface and have room to turn at every slot', ()
       assert.equal(y, level + sampleWaterSurface(x, z, time, field).x);
       assert.ok(Math.abs(x) + .41 < 4 && Math.abs(z) + .41 < 2);
       for (let i = 0; i < slot; i++) assert.ok(model.position.distanceTo(ducks[i].position) > .82);
+    }
+  }
+});
+
+test('swim rings and ducks share a moving waterline without crossing after placements and removals', () => {
+  const tank = createInitialState();
+  for (let i = 0; i < MAX_TOYS; i++) {
+    assert.ok(addToy(tank, i % 2 === 0 ? 'duck' : 'swimRing').ok);
+  }
+  // Free two duck positions and fill them with rings. The independent display
+  // numbers for the two kinds can coincide after the inventory changes.
+  const ducks = tank.toys.filter(toy => toy.kind === 'duck');
+  for (const duck of [ducks[1], ducks[4]]) {
+    removeToy(tank, duck.id);
+    assert.ok(addToy(tank, 'swimRing').ok);
+  }
+  const restored = restoreState(JSON.parse(JSON.stringify(tank)));
+  const models = restored.toys.map(() => new Object3D());
+  const wave = new Vector3();
+  for (let time = 0; time < 150; time += .5) {
+    for (const [i, toy] of restored.toys.entries()) {
+      const model = models[i];
+      poseToy(model, toy, time, level, substrateHeight);
+      const {x, y, z} = model.position;
+      sampleWaterSurface(x, z, time, wave);
+      assert.equal(y, level + wave.x);
+      assert.equal(model.rotation.x, -Math.atan(wave.z));
+      assert.equal(model.rotation.z, Math.atan(wave.y));
+      for (let j = 0; j < i; j++) {
+        const peer = models[j].position;
+        assert.ok(Math.hypot(x - peer.x, z - peer.z) > .82, 'surface toys keep horizontal clearance');
+      }
     }
   }
 });

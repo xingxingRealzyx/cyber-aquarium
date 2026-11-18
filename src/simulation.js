@@ -39,8 +39,16 @@ export const HARDSCAPE = Object.freeze({
 });
 
 export const TOYS = Object.freeze({
-  duck: { name: '小黄鸭' },
+  duck: { name: '小黄鸭', surface: true },
   diver: { name: '潜水员' },
+  swimRing: {
+    name: '小游泳圈',
+    surface: true,
+    colors: Object.freeze({
+      '#ef684e': '珊瑚红', '#f5ad36': '金橙', '#369cd9': '海蓝',
+      '#35b9a0': '薄荷绿', '#a77be2': '丁香紫', '#ee78a3': '玫瑰粉',
+    }),
+  },
 });
 
 export const MAX_PLANTS = 40;
@@ -248,6 +256,13 @@ function availableSlot(used, preferred, limit) {
   return slot;
 }
 
+// Ducks and rings keep their own display numbers but share space on the water.
+function reserveSurfaceSlot(item, used, preferred = item.slot) {
+  const surfaceSlot = availableSlot(used, preferred, MAX_TOYS);
+  if (surfaceSlot !== item.slot) item.surfaceSlot = surfaceSlot;
+  used.add(surfaceSlot);
+}
+
 function plant(species, slot) {
   return { id: key('plant'), species, slot, biomass: 1, seed: Math.random() };
 }
@@ -337,6 +352,14 @@ function addDecoration(state, collection, kind) {
   if (items.length >= limit) return { ok: false, message: `最多放置 ${limit} 件${label}。` };
   const used = new Set(items.filter(item => item.kind === kind).map(item => item.slot));
   const added = { id: key(idPrefix), kind, slot: availableSlot(used, null, limit) };
+  if (catalog[kind].surface) {
+    const surface = items.filter(item => catalog[item.kind].surface);
+    reserveSurfaceSlot(added, new Set(surface.map(item => item.surfaceSlot ?? item.slot)));
+  }
+  if (catalog[kind].colors) {
+    const colors = Object.keys(catalog[kind].colors);
+    added.color = colors[Math.floor(Math.random() * colors.length)];
+  }
   items.push(added);
   const message = `已放入${catalog[kind].name} #${added.slot + 1}`;
   record(state, message);
@@ -715,6 +738,7 @@ export function restoreState(raw) {
   for (const [collection, { catalog, limit, idPrefix }] of Object.entries(decorations)) {
     if (!Array.isArray(data[collection])) continue;
     const usedIds = new Set();
+    const usedSurfaceSlots = new Set();
     const slots = new Map(Object.keys(catalog).map(kind => [kind, new Set()]));
     base[collection] = data[collection].filter(item => item && typeof item.kind === 'string' && Object.hasOwn(catalog, item.kind)).slice(0, limit).map(item => {
       const used = slots.get(item.kind);
@@ -723,7 +747,15 @@ export function restoreState(raw) {
       const validId = typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 100 && !usedIds.has(item.id);
       const id = validId ? item.id : key(idPrefix);
       usedIds.add(id);
-      return { id, kind: item.kind, slot };
+      const restored = { id, kind: item.kind, slot };
+      if (catalog[item.kind].surface) reserveSurfaceSlot(restored, usedSurfaceSlots, item.surfaceSlot);
+      const palette = catalog[item.kind].colors;
+      if (palette) {
+        const color = typeof item.color === 'string' ? item.color.toLowerCase() : '';
+        const colors = Object.keys(palette);
+        restored.color = Object.hasOwn(palette, color) ? color : colors[slot % colors.length];
+      }
+      return restored;
     });
   }
   base.nextAnimalNumber = Math.max(Math.round(numeric(data.nextAnimalNumber,1,1,1e8)),...base.animals.map(a=>a.serial+1),1);

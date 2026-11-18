@@ -368,7 +368,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     for(const toy of placedToys){
       let model=toys.get(toy.id);
       if(!model){
-        model=createToyModel(toy.kind);
+        model=createToyModel(toy.kind, toy.color, sceneryLoader);
         model.userData.toyKind=toy.kind;
         tank.add(model);toys.set(toy.id,model);
       }
