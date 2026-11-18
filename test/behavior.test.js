@@ -136,7 +136,7 @@ test('feeding a full legacy bed preserves every settled grain and adds fresh sur
   assert.ok(fresh.length > 0 && fresh.every(p => p.y > 3.8));
   nearly(fresh.reduce((sum,p) => sum + p.mass, 0), .08);
   run(state, 5);
-  assert.ok(fresh.every(p => p.y < 3.6), 'fresh pellets actually sink above the full bed');
+  assert.ok(fresh.every(p => p.y > 3 && p.y < 3.6), 'fresh pellets actually sink through the water column');
   nearly(state.food, .48);
 });
 
@@ -161,7 +161,11 @@ test('rapid feeding preserves underwater grains through congestion, save and eve
   assert.deepEqual(restored.foodPellets, state.foodPellets);
   nearly(restored.food, state.food);
 
-  run(restored, 100);
+  run(restored, 3);
+  const lowerIds = new Set(submerged.map(p => p.id));
+  const waiting = restored.foodPellets.filter(p => !lowerIds.has(p.id));
+  assert.ok(waiting.length > 0 && waiting.every(p => p.y > 3.8), 'fresh food waits at the surface while the water column is full');
+  run(restored, 97);
   assert.ok(restored.foodPellets.every(p => Math.abs(p.y - substrateHeight(p.x,p.z) - .04) < .002));
   const settled = new Map(restored.foodPellets.map(p => [p.id,p]));
   for (const p of bed) {

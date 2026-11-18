@@ -161,7 +161,8 @@ try {
     const { advanceBehavior } = await import('/src/behavior.js');
     const tank = createInitialState();
     tank.animals = [];
-    feed(tank);
+    // Fill all 160 slots a v0.6.1 tank could have, then let those five portions settle.
+    for (let i = 0; i < 5; i++) feed(tank);
     advanceBehavior(tank, 30);
     advanceBehavior(tank, 15);
     tank.paused = true;
@@ -184,7 +185,7 @@ try {
       assert.deepEqual(byId.get(old.id), old, 'fresh feeds leave settled food in place');
     }
     assert.ok(tank.foodPellets.some(p => p.y > 3.8), 'fresh food enters at the surface');
-    assert.ok(Math.abs(tank.food - .08 * 13) < 1e-8, 'all repeated feeds are accounted for');
+    assert.ok(Math.abs(tank.food - bottomFixture.food - .08 * 12) < 1e-8, 'all repeated feeds are accounted for');
   }
   verifyBottomFeed(afterBurst);
   await page.reload();
