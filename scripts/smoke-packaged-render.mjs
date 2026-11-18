@@ -22,18 +22,15 @@ function adapterKind(renderer, featureStatus) {
   return 'unverified';
 }
 
-let application;
-try {
-  application = await electron.launch({ executablePath, args: ['--user-data-dir=' + profile], env, timeout: 90000 });
+const requireHardware = env.REQUIRE_HARDWARE_GPU === '1';
+async function verifyFrame(application, backend) {
   const page = await application.firstWindow({ timeout: 90000 });
   const shell = await application.evaluate(({ app }) => ({
     packaged: app.isPackaged, appPath: app.getAppPath(), profile: app.getPath('userData'),
-    platform: process.platform, arch: process.arch, accelerationEnabled: app.isHardwareAccelerationEnabled(),
-    features: app.getGPUFeatureStatus(),
+    platform: process.platform, arch: process.arch,
   }));
   assert.equal(shell.packaged, true);
   assert.equal(path.resolve(shell.profile), profile);
-  assert.equal(shell.accelerationEnabled, true, 'the application enables hardware acceleration');
   assert.match(shell.appPath, /app\.asar$/);
 
   const errors = [];
@@ -42,7 +39,22 @@ try {
   const ready = () => window.aquariumDiagnostics?.stats.triangles > 0 || document.querySelector('#error')?.hidden === false;
   await page.waitForFunction(ready, null, { timeout: 120000 });
   assert.match(page.url(), /^file:.*app\.asar\/dist\/index\.html$/);
-  assert.equal(await page.locator('#error').isVisible(), false, await page.locator('#error').textContent());
+  const graphics = await application.evaluate(({ app }) => {
+    const features = app.getGPUFeatureStatus();
+    return { accelerationEnabled: app.isHardwareAccelerationEnabled(),
+      webglFeature: features.webgl, gpuCompositing: features.gpu_compositing };
+  });
+  console.log(JSON.stringify({backend, ...graphics}));
+  if (await page.locator('#error').isVisible()) {
+    const reason = await page.locator('#error small').textContent();
+    const noContext = /creating WebGL context|WebGL 2.*(?:unavailable|not supported)/i.test(reason);
+    const hardwareUnavailable = !graphics.accelerationEnabled || !graphics.webglFeature?.startsWith('enabled');
+    if (backend === 'default' && noContext && hardwareUnavailable) {
+      console.log('The default adapter could not create a WebGL 2 context:', reason);
+      return false;
+    }
+    throw new Error(reason);
+  }
   await page.waitForFunction(() => document.querySelector('#aquarium canvas')?.style.visibility !== 'hidden');
   const result = await page.evaluate(async () => {
     // Sample the real, just-drawn transparent tank before Chromium discards its frame.
@@ -73,11 +85,9 @@ try {
       opaquePixels: opaque, clearPixels: clear, uniqueOpaqueColors: colors.size,
     };
   });
-  const kind = adapterKind(result.renderer, shell.features.webgl ?? '');
+  const kind = adapterKind(result.renderer, graphics.webglFeature ?? '');
   const report = {
-    platform: shell.platform, arch: shell.arch, accelerationEnabled: shell.accelerationEnabled,
-    adapterKind: kind, webglFeature: shell.features.webgl,
-    gpuCompositing: shell.features.gpu_compositing, ...result,
+    backend, platform: shell.platform, arch: shell.arch, ...graphics, adapterKind: kind, ...result,
   };
   console.log(JSON.stringify(report, null, 2));
   assert.match(result.version, /^WebGL 2/);
@@ -85,11 +95,31 @@ try {
   assert.ok(result.stats.drawCalls > 0 && result.stats.triangles > 0);
   assert.ok(result.opaquePixels > 5 && result.uniqueOpaqueColors > 5 && result.clearPixels > 0, 'the GPU frame contains scenery and clear desktop pixels');
   assert.deepEqual(errors, []);
-  if (env.REQUIRE_HARDWARE_GPU === '1') {
+  if (requireHardware) {
+    assert.equal(graphics.accelerationEnabled, true);
     assert.equal(kind, 'hardware', 'this runner must use a recognized hardware WebGL adapter');
-    assert.match(shell.features.gpu_compositing ?? '', /^enabled/);
+    assert.match(graphics.gpuCompositing ?? '', /^enabled/);
+  }
+  return true;
+}
+
+async function run(backend, switches = []) {
+  const args = ['--user-data-dir=' + profile, ...switches];
+  const application = await electron.launch({executablePath, args, env, timeout: 90000});
+  try {
+    return await verifyFrame(application, backend);
+  } finally {
+    await application.close();
+  }
+}
+
+try {
+  if (!await run('default')) {
+    assert.ok(!requireHardware && process.argv.includes('--allow-ci-software'),
+      'this host requires an available WebGL 2 adapter');
+    // Only this disposable local-app test process opts in to a software adapter.
+    await run('CI software fixture', ['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']);
   }
 } finally {
-  await application?.close();
   await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

@@ -52,7 +52,7 @@ app.innerHTML = `
     <header><div><span class="eyebrow">YOUR LIVING AQUARIUM</span><h1>照料这一方水</h1></div><button class="icon-btn" data-action="close" aria-label="关闭面板">${icon('close')}</button></header>
     <nav class="tabs" aria-label="管理分类"><button data-tab="water" class="active">水环境</button><button data-tab="life">生物</button><button data-tab="journal">日志</button></nav>
     <div id="panel-content" class="panel-content"></div>
-    <footer><span id="render-stat">GPU · WebGL 2</span><span>60 L · 淡水生态</span></footer>
+    <footer><span id="render-stat">WebGL 2</span><span>60 L · 淡水生态</span></footer>
   </aside>
   <aside id="inspector" class="inspector interactive" aria-label="生物个体档案" hidden></aside>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -151,7 +151,7 @@ function journalPanel() {
 function updatePanel() {
   const assessment=getAssessment(state);
   $('#health-dot').className=assessment.level;
-  $('#render-stat').textContent=`GPU · ${Math.round(stats.fps||0)} FPS`;
+  $('#render-stat').textContent=`WebGL 2 · ${Math.round(stats.fps||0)} FPS`;
   if (panelOpen && !(document.activeElement?.type==='range' && document.activeElement.matches(':active'))) {
     const content=$('#panel-content'), scroll=content.scrollTop, focusedId=document.activeElement?.id;
     content.innerHTML=activeTab==='water'?waterPanel():activeTab==='life'?lifePanel():journalPanel();
@@ -343,6 +343,9 @@ try {
     onSelect:a=>selectAnimal(typeof a==='string'?a:a?.id),
     onStats:s=>{stats=s;},
   });
+  const gl=renderer.renderer.getContext();
+  const adapter=gl.getExtension('WEBGL_debug_renderer_info');
+  $('#render-stat').title=gl.getParameter(adapter?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER);
   placeDesktopAquarium();
   window.addEventListener('resize',()=>{renderer.resize();placeDesktopAquarium();});
   let previous=performance.now(), elapsed=0, lastHitTest=0;

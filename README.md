@@ -13,7 +13,7 @@
 | Windows x64 | `Cyber-Aquarium-windows-x64.zip` | 将整个压缩包解压到同一文件夹，双击其中的 `Cyber Aquarium.exe`。 |
 | macOS Apple Silicon | `Cyber-Aquarium-macos-arm64.zip` | 解压后将 `Cyber Aquarium.app` 拖入「应用程序」并打开。 |
 
-两个平台都使用 GPU 渲染，需要支持 WebGL 2 的显卡和驱动。Windows 版通过 Chromium 的 ANGLE 调用显卡，通常使用 Direct3D 11。Windows 构建日志会列出 CI 虚拟机实际使用的适配器与后端，玩家电脑会按本机驱动选择。macOS 构建使用本地临时签名，首次打开时系统可能提示验证开发者。
+两个平台都使用 GPU 渲染，需要支持 WebGL 2 的显卡和驱动。Windows 版通过 Chromium 的 ANGLE 调用显卡，通常使用 Direct3D 11。在「水质」面板底部，将鼠标悬停在 **WebGL 2 · FPS** 上，可以查看当前鱼缸所用的图形适配器。Windows 构建日志也会记录 CI 机器实际使用的适配器与后端。macOS 构建使用本地临时签名，首次打开时系统可能提示验证开发者。
 
 ## 先试这几个操作
 

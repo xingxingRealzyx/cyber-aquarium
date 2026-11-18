@@ -38,7 +38,9 @@ jobs:
       - run: npm run ${{ matrix.command }}
       - name: Verify packaged Windows WebGL renderer
         if: runner.os == 'Windows'
-        run: node scripts/smoke-packaged-render.mjs "release/Cyber Aquarium-win32-x64/Cyber Aquarium.exe"
+        run: |
+          Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion | Format-Table
+          node scripts/smoke-packaged-render.mjs "release/Cyber Aquarium-win32-x64/Cyber Aquarium.exe" --allow-ci-software
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: release/Cyber-Aquarium-${{ matrix.platform }}-${{ matrix.arch }}.zip
