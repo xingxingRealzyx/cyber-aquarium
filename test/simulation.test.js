@@ -1,9 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { advanceBehavior } from '../src/behavior.js';
-import { createInitialState, advanceSimulation, addAnimal, addPlant, feed, changeWater, removeDead, getAssessment, restoreState, ammoniaFraction } from '../src/simulation.js';
+import { createInitialState, advanceSimulation, addAnimal, addPlant, feed, changeWater, removeAnimal, removeDead, getAssessment, restoreState, ammoniaFraction } from '../src/simulation.js';
 
 const totalNitrogen = s => s.water.ammonia + s.water.nitrite + s.water.nitrate;
+
+test('removing an individual preserves its tankmates and survives a reload', () => {
+  const state = createInitialState();
+  const fish = addAnimal(state, 'neon').animal;
+  const otherFish = addAnimal(state, 'neon').animal;
+  const remaining = state.animals.filter(animal => animal.id !== fish.id);
+  assert.equal(removeAnimal(state, fish.id).ok, true);
+  assert.deepEqual(state.animals, remaining);
+  assert.ok(state.events[0].message.includes(fish.label));
+  const saved = JSON.stringify(state);
+  assert.equal(removeAnimal(state, fish.id).ok, false);
+  assert.equal(JSON.stringify(state), saved);
+  const restored = restoreState(saved);
+  assert.deepEqual(restored.animals.map(a => a.id), remaining.map(a => a.id));
+  assert.equal(addAnimal(restored, 'neon').animal.serial, otherFish.serial + 1);
+  for (const animal of [...restored.animals]) removeAnimal(restored, animal.id);
+  assert.deepEqual(restoreState(JSON.stringify(restored)).animals, []);
+});
 
 test('25% water change removes exactly 25% dissolved nitrogen and preserves the biofilter', () => {
   const s = createInitialState();

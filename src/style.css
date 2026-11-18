@@ -22,6 +22,8 @@
 .individual-facts dd{color:#c3d4ba;font-size:10px;margin:0;font-variant-numeric:tabular-nums;white-space:nowrap}
 .individual-note{font-size:9px;line-height:1.8;color:#839e85;margin:12px 0}
 #inspector .individual-feed{width:100%;padding:9px;flex:none;font-size:10px}
+#inspector .danger-btn{margin-top:8px;padding:9px}
+#inspector .danger-btn:hover{background:#d28c7426}
 .resident.selected{background:#bad3a40c}
 .resident-name{flex:1;min-width:0;line-height:1.5}
 .resident-name small{display:block;margin:3px 0 0;font-size:8px}

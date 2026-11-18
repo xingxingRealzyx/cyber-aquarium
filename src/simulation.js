@@ -144,6 +144,15 @@ export function addAnimal(state, species) {
   return { ok: true, animal: added, message: `已加入${SPECIES[species].name}` };
 }
 
+export function removeAnimal(state, id) {
+  const index = state.animals.findIndex(animal => animal.id === id);
+  if (index < 0) return { ok: false, message: '这只生物已不在缸中' };
+  const [animal] = state.animals.splice(index, 1);
+  const message = `已移出${animal.label}`;
+  record(state, message);
+  return { ok: true, message };
+}
+
 export function addPlant(state, species) {
   if (!Object.hasOwn(PLANTS, species)) return { ok: false, message: '未知水草种类' };
   if (state.plants.length >= MAX_PLANTS) return { ok: false, message: `最多种植 ${MAX_PLANTS} 丛水草。` };

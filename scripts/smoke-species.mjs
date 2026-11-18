@@ -51,6 +51,21 @@ try {
   assert.equal((await readAnimals()).length, stock.length + additions.length);
   await page.keyboard.press('Escape');
 
+  await page.reload();
+  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  const restored = await readAnimals();
+  assert.deepEqual(restored.map(a => a.id), [...stock, ...additions].map(a => a.id));
+  for (const original of additions) {
+    const fish = restored.find(a => a.id === original.id);
+    assert.equal(fish.species, original.species);
+    assert.equal(fish.seed, original.seed);
+    assert.equal(fish.label, original.label);
+  }
+  await page.mouse.move(1, 1);
+  await page.waitForFunction(() => +getComputedStyle(document.querySelector('.dock-wrap')).opacity < .01 && +getComputedStyle(document.querySelector('#hint')).opacity < .01);
+  await mkdir('artifacts', { recursive: true });
+  await page.screenshot({ path: 'artifacts/aquarium-species.png', omitBackground: true });
+
   // Select the new fish furthest from other projected centers to avoid ambiguous occlusion.
   const ids = additions.map(a => a.id);
   let selected;
@@ -68,24 +83,28 @@ try {
     if (!selected) await page.keyboard.press('Escape');
   }
   assert.ok(selected, 'a new three-dimensional fish can be picked and inspected');
-  await page.locator('#inspector').getByRole('heading', { name: selected.label }).waitFor();
-  await page.keyboard.press('Escape');
+  const inspector = page.locator('#inspector');
+  await inspector.getByRole('heading', { name: selected.label }).waitFor();
+  await page.setViewportSize({ width: 720, height: 520 });
+  const removeButton = inspector.getByRole('button', { name: '移出鱼缸', exact: true });
+  assert.equal(await inspector.getByRole('button').last().textContent(), await removeButton.textContent());
+  await removeButton.scrollIntoViewIfNeeded();
+  assert.ok(await inspector.evaluate(el => el.scrollTop > 0), 'the compact inspector scrolls to the remove button');
+  await removeButton.click();
+  await inspector.waitFor({ state: 'hidden' });
+  assert.equal(await page.evaluate(() => window.aquariumDiagnostics.selectedId), null);
+  const remainingIds = restored.filter(a => a.id !== selected.id).map(a => a.id);
+  assert.deepEqual((await readAnimals()).map(a => a.id), remainingIds);
+  await page.waitForFunction(id => !window.aquariumDiagnostics.screenAnimals.some(a => a.id === id), selected.id);
+  await page.mouse.move(360, 260);
+  await page.getByRole('button', { name: '添加生物', exact: true }).click();
+  await page.getByText(`${remainingIds.length} 存活`, { exact: true }).waitFor();
+  assert.deepEqual(await page.locator('.resident').evaluateAll(rows => rows.map(row => row.dataset.select)), remainingIds);
   await page.reload();
   await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
-  const restored = await readAnimals();
-  assert.deepEqual(restored.map(a => a.id), [...stock, ...additions].map(a => a.id));
-  for (const original of additions) {
-    const fish = restored.find(a => a.id === original.id);
-    assert.equal(fish.species, original.species);
-    assert.equal(fish.seed, original.seed);
-    assert.equal(fish.label, original.label);
-  }
-  await page.mouse.move(1, 1);
-  await page.waitForFunction(() => +getComputedStyle(document.querySelector('.dock-wrap')).opacity < .01 && +getComputedStyle(document.querySelector('#hint')).opacity < .01);
-  await mkdir('artifacts', { recursive: true });
-  await page.screenshot({ path: 'artifacts/aquarium-species.png', omitBackground: true });
+  assert.deepEqual((await readAnimals()).map(a => a.id), remainingIds);
   assert.deepEqual(errors, []);
-  const report = { previews: previews.length, fishAdded: newSpecies, inspected: selected.label, restored: restored.length, errors };
+  const report = { previews: previews.length, fishAdded: newSpecies, inspected: selected.label, restored: restored.length, removed: selected.label, remaining: remainingIds.length, errors };
   await writeFile('artifacts/smoke-species.json', JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));
 } finally {

@@ -3,7 +3,7 @@ import { createAquarium } from './aquarium.js';
 import { advanceBehavior } from './behavior.js';
 import {
   createInitialState, restoreState, advanceSimulation, addAnimal, addPlant, feed,
-  changeWater, removeDead, getAssessment, SPECIES, PLANTS,
+  changeWater, removeAnimal, removeDead, getAssessment, SPECIES, PLANTS,
 } from './simulation.js';
 
 const SAVE_KEY = 'chengjing.aquarium.v1';
@@ -54,7 +54,12 @@ app.innerHTML = `
     <div id="panel-content" class="panel-content"></div>
     <footer><span id="render-stat">WebGL 2</span><span>60 L · 淡水生态</span></footer>
   </aside>
-  <aside id="inspector" class="inspector interactive" aria-label="生物个体档案" hidden></aside>
+  <aside id="inspector" class="inspector interactive" aria-label="生物个体档案" hidden>
+    <button class="icon-btn" data-action="deselect" aria-label="关闭生物信息">${icon('close')}</button>
+    <section class="individual-details"></section>
+    <button class="secondary-btn individual-feed" data-action="feed">${icon('feed')} 投喂全缸</button>
+    <button class="danger-btn" data-action="remove-animal">移出鱼缸</button>
+  </aside>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div class="dock-wrap chrome interactive"><div id="dock" class="dock">
     <button type="button" class="drag-handle" title="按住这里移动整个鱼缸" aria-label="移动鱼缸">${icon('move')}<span>移动</span></button><i></i>
@@ -183,14 +188,13 @@ function updateInspector() {
   const a=state.animals.find(x=>x.id===selectedId);
   const inspector=$('#inspector');
   inspector.hidden=!a;
-  if (!a) {inspector.removeAttribute('data-animal-id');renderer?.setSelectedAnimal?.(null);return;}
-  // Keep the pressed control mounted until pointer-up while numeric fields update.
-  if(pointerDown&&inspector.dataset.animalId===a.id) return;
+  if (!a) {selectedId=null;inspector.removeAttribute('data-animal-id');renderer?.setSelectedAnimal?.(null);return;}
+  if (inspector.dataset.animalId !== a.id) inspector.scrollTop = 0;
   inspector.dataset.animalId=a.id;
+  inspector.querySelector('.individual-feed').hidden=!a.alive;
   const hunger=Math.round(a.hunger), health=Math.round(a.health), stress=Math.round((a.stress||0)*100);
   const lastMeal=a.lastMealHours==null?'尚未摄食':state.elapsedHours-a.lastMealHours<1/60?'刚刚':`${durationLabel(Math.max(0,state.elapsedHours-a.lastMealHours))}前`;
-  inspector.innerHTML=`<button class="icon-btn" data-action="deselect" aria-label="关闭生物信息">${icon('close')}</button>
-    <span class="eyebrow">INDIVIDUAL LIFE · 个体档案</span>
+  inspector.querySelector('.individual-details').innerHTML=`<span class="eyebrow">INDIVIDUAL LIFE · 个体档案</span>
     <header class="individual-heading"><h2>${escape(animalLabel(a))}</h2><small>${escape(SPECIES[a.species]?.latin)}</small></header>
     <p class="behavior-badge ${a.behavior==='seeking'||a.behavior==='eating'?'feeding':''} ${!a.alive?'danger':''}" data-field="behavior"><i></i>${behaviorLabel(a)}</p>
     <section class="individual-vitals" aria-label="个体状态">
@@ -206,8 +210,7 @@ function updateInspector() {
       <div><dt>代谢系数</dt><dd>${(a.metabolism||1).toFixed(2)}×</dd></div>
       <div><dt>当前食欲</dt><dd>${!a.alive?'—':hunger>75?'十分饥饿':hunger>40?'想吃东西':hunger>12?'略有食欲':'已经吃饱'}</dd></div>
     </dl>
-    <p class="individual-note">${!a.alive?`死因：${escape(a.causeOfDeath||'未知')}。请及时清理。`:a.behavior==='gasping'?'氧气不足，优先改善供氧。':state.paused?'生态已暂停，继续模拟后才会进食。':'饥饿度越高，越积极觅食；吃到饲料后才会下降。'}</p>
-    ${a.alive?`<button class="secondary-btn individual-feed" data-action="feed">${icon('feed')} 投喂全缸</button>`:''}`;
+    <p class="individual-note">${!a.alive?`死因：${escape(a.causeOfDeath||'未知')}。请及时清理。`:a.behavior==='gasping'?'氧气不足，优先改善供氧。':state.paused?'生态已暂停，继续模拟后才会进食。':'饥饿度越高，越积极觅食；吃到饲料后才会下降。'}</p>`;
 }
 function perform(action) {
   $('#hint').classList.add('dismissed');
@@ -217,6 +220,11 @@ function perform(action) {
   else if(action==='settings') openPanel('journal');
   else if(action==='feed') { const result=feed(state); notify(result.ok?(state.paused?'饲料已入水 · 继续模拟后鱼会进食':'饲料已入水 · 饥饿的鱼会主动靠近进食'):result.message); }
   else if(action==='change-water') { changeWater(state,.25); notify('已更换 25% 水 · 使用等温、除氯新水'); }
+  else if(action==='remove-animal') {
+    const result = removeAnimal(state, selectedId);
+    selectAnimal(null);
+    notify(result.message);
+  }
   else if(action==='remove-dead') { removeDead(state); notify('已移除死亡生物'); }
   else if(action==='rotate') { autoRotate=!autoRotate; renderer?.setAutoRotate(autoRotate); document.querySelector('[data-action="rotate"]').classList.toggle('selected',autoRotate); }
   else if(action==='reset-view') { autoRotate=false; renderer?.setAutoRotate(false); renderer?.resetView(); document.querySelector('[data-action="rotate"]').classList.remove('selected'); }
