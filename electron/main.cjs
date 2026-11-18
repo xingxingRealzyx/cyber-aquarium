@@ -352,6 +352,8 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('activate', () => revealAquarium());
   app.whenReady().then(() => {
+    // Resume cleanup if the last verified update was interrupted after relaunch.
+    if (app.isPackaged && !process.env.CYBER_AQUARIUM_UPDATE_TOKEN) acknowledgeUpdateLaunch();
     readPreferences();
     Menu.setApplicationMenu(null);
     bindIPC();

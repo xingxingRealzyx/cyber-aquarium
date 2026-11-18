@@ -126,7 +126,10 @@ async function openTestWindow() {
 async function openAndStage(firstRun) {
   const { application, page } = await openTestWindow();
   if (firstRun) await page.evaluate(() => localStorage.setItem('smoke-update-stock', 'keep-this-tank'));
-  else assert.equal(await page.evaluate(() => localStorage.getItem('smoke-update-stock')), 'keep-this-tank');
+  else {
+    assert.equal(await page.evaluate(() => localStorage.getItem('smoke-update-stock')), 'keep-this-tank');
+    await waitFor(async () => !await stat(rescue).catch(() => null), 'A regular launch did not finish cleaning the previous update', 15000);
+  }
   const workDir = await mkdtemp(path.join(temp, 'download-'));
   const archivePath = path.join(workDir, 'aquarium.zip');
   await copyFile(archive, archivePath);
@@ -174,11 +177,15 @@ try {
   await writeFile(personalFile, 'personal file');
   const original = await stat(exe, { bigint: true });
   const normal = await openAndStage(true);
+  const recoveryScript = await readFile(rescue);
   await closeAquarium(normal.application);
   await verifyRelaunch(normal.stage);
   assert.notEqual((await stat(exe, { bigint: true })).ino, original.ino, 'the installed executable was replaced');
   console.log('Verified staged installation, first-frame acknowledgement, restart and cleanup.');
 
+  // Simulate quitting during cleanup, after the confirmed backup was retired.
+  await mkdir(normal.stage + '.finished');
+  await writeFile(rescue, recoveryScript);
   // Interrupt the helper and reproduce the exact on-disk state between backup and install.
   const interrupted = await openAndStage(false);
   const journal = JSON.parse(await readFile(path.join(interrupted.stage, 'journal.json'), 'utf8'));
