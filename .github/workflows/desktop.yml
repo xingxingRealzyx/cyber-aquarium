@@ -36,6 +36,8 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run ${{ matrix.command }}
+      - name: Verify in-place update with an isolated installation
+        run: node scripts/smoke-update-install.mjs
       - name: Verify packaged Windows WebGL renderer
         if: runner.os == 'Windows'
         run: |

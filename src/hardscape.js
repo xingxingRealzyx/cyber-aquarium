@@ -73,21 +73,27 @@ function scanGeometry(shape) {
   return geometry;
 }
 
-function stoneBank(manager) {
-  const originals = stoneScans.map(scanGeometry);
-  const pieces = stones.map(([x, z, size, yaw, tilt, index]) => {
-    const geometry = originals[index].clone();
-    const source = stoneScans[index].size;
-    geometry.scale(size[0] / source[0], size[1] / source[1], size[2] / source[2]);
-    geometry.rotateZ(tilt);
-    geometry.rotateY(yaw);
-    geometry.computeBoundingBox();
-    geometry.translate(x, substrateHeight(x, z) - geometry.boundingBox.min.y - size[1] * .13, z);
-    return geometry;
-  });
-  const bank = mergeGeometries(pieces);
-  for (const geometry of [...originals, ...pieces]) geometry.dispose();
-  return new THREE.Mesh(bank, scannedMaterial('stone', manager));
+function extraPosition(slot) {
+  // Interleave positions along both axes, leaving space between the pieces and the glass.
+  return [(((slot + 1) * .618034) % 1 - .5) * 6.0, (((slot + 1) * .414214) % 1 - .5) * 2.45];
+}
+
+function stoneGeometry(slot) {
+  let spec = stones[slot];
+  if (!spec) {
+    const [x, z] = extraPosition(slot - stones.length);
+    const [, , size, yaw, tilt, scan] = stones[slot % stones.length];
+    spec = [x, z, size.map(n => n * .77), yaw + slot, tilt, scan];
+  }
+  const [x, z, size, yaw, tilt, scan] = spec;
+  const geometry = scanGeometry(stoneScans[scan]);
+  const source = stoneScans[scan].size;
+  geometry.scale(size[0] / source[0], size[1] / source[1], size[2] / source[2]);
+  geometry.rotateZ(tilt);
+  geometry.rotateY(yaw);
+  geometry.computeBoundingBox();
+  geometry.translate(x, substrateHeight(x, z) - geometry.boundingBox.min.y - size[1] * .13, z);
+  return geometry;
 }
 
 // A forked branch, a winding limb and a piece of split wood keep the photographed
@@ -101,38 +107,60 @@ const branches = [
   [1, [-1.96,.78,.15], [-1.54,.38,1.15], 2.2, 1.16],
 ];
 
-function driftwood(manager) {
-  const geometries = branches.map(([scan, start, end, roll, girth]) => {
-    const shape = branchScans[scan];
-    const geometry = scanGeometry(shape);
-    const [width, height, length] = shape.size;
-    // Coordinate of the broken base in that scan's local bounding box.
-    const base = [[-.06,.46,.49], [.40,.66,-.49], [-.07,.09,.49]][scan];
-    geometry.translate(-base[0]*width, -base[1]*height, -base[2]*length);
-    if (base[2] < 0) geometry.rotateY(Math.PI);
-    const origin = new THREE.Vector3(...start);
-    const direction = new THREE.Vector3(...end).sub(origin);
-    const scale = direction.length() / length;
-    geometry.scale(scale * girth, scale * girth, scale);
-    geometry.rotateZ(roll);
-    const z = direction.normalize().negate();
-    const x = new THREE.Vector3(0,1,0).cross(z).normalize();
-    const y = new THREE.Vector3().crossVectors(z,x);
-    geometry.applyMatrix4(new THREE.Matrix4().makeBasis(x,y,z).setPosition(origin));
-    return geometry;
-  });
-  const mesh = new THREE.Mesh(mergeGeometries(geometries), scannedMaterial('wood', manager));
-  geometries.forEach(geometry => geometry.dispose());
-  return mesh;
+function branchGeometry(slot) {
+  let spec = branches[slot];
+  if (!spec) {
+    const [x, z] = extraPosition(slot);
+    const y = substrateHeight(x, z);
+    const start = [x, y, z];
+    const end = [x + (x < 0 ? 1.3 : -1.3), y + .7 + .3 * (slot % 4), z * .6];
+    spec = [slot % branchScans.length, start, end, slot * .7, .95];
+  }
+  const [scan, start, end, roll, girth] = spec;
+  const shape = branchScans[scan];
+  const geometry = scanGeometry(shape);
+  const [width, height, length] = shape.size;
+  // Coordinate of the broken base in that scan's local bounding box.
+  const base = [[-.06,.46,.49], [.40,.66,-.49], [-.07,.09,.49]][scan];
+  geometry.translate(-base[0]*width, -base[1]*height, -base[2]*length);
+  if (base[2] < 0) geometry.rotateY(Math.PI);
+  const origin = new THREE.Vector3(...start);
+  const direction = new THREE.Vector3(...end).sub(origin);
+  const scale = direction.length() / length;
+  geometry.scale(scale * girth, scale * girth, scale);
+  geometry.rotateZ(roll);
+  const z = direction.normalize().negate();
+  const x = new THREE.Vector3(0,1,0).cross(z).normalize();
+  const y = new THREE.Vector3().crossVectors(z,x);
+  geometry.applyMatrix4(new THREE.Matrix4().makeBasis(x,y,z).setPosition(origin));
+  return geometry;
 }
 
 export function createHardscape(manager) {
   const group = new THREE.Group();
-  for (const mesh of [stoneBank(manager), driftwood(manager)]) {
+  group.name = '石组与沉木';
+  const batches = Object.entries({ stone: stoneGeometry, wood: branchGeometry }).map(([kind, geometryFor]) => {
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), scannedMaterial(kind, manager));
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    mesh.visible = false;
     group.add(mesh);
+    return { mesh, kind, geometryFor, signature: '' };
+  });
+
+  function update(items) {
+    for (const batch of batches) {
+      const slots = items.filter(item => item.kind === batch.kind).map(item => item.slot);
+      const signature = slots.join(',');
+      if (signature === batch.signature) continue;
+      const pieces = slots.map(batch.geometryFor);
+      const geometry = pieces.length ? mergeGeometries(pieces) : new THREE.BufferGeometry();
+      for (const piece of pieces) piece.dispose();
+      batch.mesh.geometry.dispose();
+      batch.mesh.geometry = geometry;
+      batch.mesh.visible = pieces.length > 0;
+      batch.signature = signature;
+    }
   }
-  group.name = '石组与沉木';
-  return group;
+  return { group, update };
 }

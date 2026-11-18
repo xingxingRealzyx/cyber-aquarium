@@ -41,3 +41,19 @@
 .resident-dot.angelfish { background: #bdb6a5; }
 .resident-dot.zebra { background: #86a5be; }
 .resident-dot.harlequin { background: #c79469; }
+
+.scenery-list { border-top: 1px solid #b2ceb421; }
+.scenery-row { border-bottom: 1px solid #b2ceb421; }
+.scenery-controls { display: flex; align-items: center; gap: 6px; padding: 7px 0; }
+.scenery-kind { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; padding: 10px 8px 10px 0; text-align: left; background: transparent; }
+.scenery-kind strong { font-size: 12px; font-weight: 500; }
+.scenery-kind > span { color: #a2b9a7; font-size: 10px; }
+.scenery-kind:disabled { opacity: .7; }
+.quantity { width: 31px; height: 30px; border: 1px solid #b5d7bf32; border-radius: 8px; background: #c8dfc40c; color: #cfdfc6; font-size: 15px; }
+.quantity:enabled:hover, .placed-items button:hover { background: #c8dfc424; }
+.placed-items { margin: 0 0 8px; padding: 0 0 0 10px; list-style: none; border-left: 2px solid #869e7845; }
+.placed-items li { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #b0c4ad; }
+.placed-items button { padding: 6px 9px; border-radius: 6px; color: #d6a18f; background: transparent; font-size: 10px; }
+.update-control .primary-btn, .update-control progress { width: 100%; }
+.update-control progress { height: 5px; accent-color: #b7ce9d; }
+.update-status { font-size: 11px; line-height: 1.6; color: #c5d9b1; margin: 0 0 10px; }

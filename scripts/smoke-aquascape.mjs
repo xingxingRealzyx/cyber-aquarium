@@ -59,22 +59,31 @@ try {
     await renderAndWait();
     const before={...renderer.info.memory};
     for(let i=0;i<3;i++){
-      sim.addPlant(state,'moss');
+      const {plant}=sim.addPlant(state,'moss');
+      const {item:stone}=sim.addHardscape(state,'stone');
+      const {item:wood}=sim.addHardscape(state,'wood');
       await renderAndWait();
-      state.plants.pop();
+      sim.removePlant(state,plant.id);
+      sim.removeHardscape(state,stone.id);
+      sim.removeHardscape(state,wood.id);
       await renderAndWait();
     }
     state.equipment.light=false;
     await renderAndWait();
     const after={...renderer.info.memory};
     const draws=renderer.info.render.calls, triangles=renderer.info.render.triangles;
+    for (const item of [...state.hardscape]) sim.removeHardscape(state,item.id);
+    for (const plant of [...state.plants]) sim.removePlant(state,plant.id);
+    await renderAndWait();
+    const bareTriangles=renderer.info.render.triangles;
     const gpu=renderer.getContext().getError();
     aquarium.dispose();
-    return {before,after,draws,triangles,gpu};
+    return {before,after,draws,triangles,bareTriangles,gpu};
   });
   assert.equal(metrics.gpu,0);
   assert.equal(metrics.before.textures,metrics.after.textures);
   assert.equal(metrics.before.geometries,metrics.after.geometries);
+  assert.ok(metrics.bareTriangles < metrics.triangles);
   assert.deepEqual(errors,[]);
   console.log(JSON.stringify(metrics));
 } finally {

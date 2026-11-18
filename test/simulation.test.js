@@ -1,9 +1,52 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { advanceBehavior } from '../src/behavior.js';
-import { createInitialState, advanceSimulation, addAnimal, addPlant, feed, changeWater, removeAnimal, removeDead, getAssessment, restoreState, ammoniaFraction } from '../src/simulation.js';
+import {
+  createInitialState, advanceSimulation, feed, changeWater, getAssessment, restoreState, ammoniaFraction,
+  addAnimal, removeAnimal, removeDead, addPlant, removePlant, addHardscape, removeHardscape, MAX_HARDSCAPE,
+} from '../src/simulation.js';
 
 const totalNitrogen = s => s.water.ammonia + s.water.nitrite + s.water.nitrate;
+
+test('legacy aquascapes retain their planted beds and original stone and driftwood layout', () => {
+  const legacy = createInitialState();
+  delete legacy.hardscape;
+  for (const p of legacy.plants) delete p.slot;
+  const state = restoreState(legacy);
+  assert.deepEqual(state.plants.map(p => p.slot), [0,1,2,3,0,1,2,0,1]);
+  assert.equal(state.hardscape.filter(item => item.kind === 'stone').length, 12);
+  assert.equal(state.hardscape.filter(item => item.kind === 'wood').length, 5);
+  const plantId = state.plants[1].id;
+  const stoneId = state.hardscape[2].id;
+  const remainingPlants = state.plants.filter(p => p.id !== plantId);
+  const remainingScenery = state.hardscape.filter(item => item.id !== stoneId);
+  assert.equal(removePlant(state, plantId).ok, true);
+  assert.equal(removeHardscape(state, stoneId).ok, true);
+  const restored = restoreState(JSON.stringify(state));
+  assert.deepEqual(restored.plants, remainingPlants);
+  assert.deepEqual(restored.hardscape, remainingScenery);
+  assert.equal(addPlant(restored, 'vallisneria').plant.slot, 1);
+  assert.equal(addHardscape(restored, 'stone').item.slot, 2);
+  for (const item of [...restored.hardscape]) removeHardscape(restored, item.id);
+  for (const p of [...restored.plants]) removePlant(restored, p.id);
+  const empty = restoreState(JSON.stringify(restored));
+  assert.deepEqual(empty.hardscape, []);
+  assert.deepEqual(empty.plants, []);
+  assert.equal(addHardscape(empty, 'wood').item.slot, 0);
+});
+
+test('unknown, duplicate and out-of-range scenery entries are sanitized on load', () => {
+  const state = restoreState({ version: 1, hardscape: [
+    {kind:'wood',id:'piece',slot:2}, {kind:'wood',id:'piece',slot:2},
+    {kind:'stone',id:'',slot:1e8}, {kind:'__proto__'}, null,
+  ]});
+  assert.deepEqual(state.hardscape.map(item => item.slot), [2,0,0]);
+  assert.equal(new Set(state.hardscape.map(item => item.id)).size, 3);
+  assert.equal(addHardscape(state, '__proto__').ok, false);
+  assert.equal(removeHardscape(state, 'missing').ok, false);
+  while (state.hardscape.length < MAX_HARDSCAPE) assert.equal(addHardscape(state, 'stone').ok, true);
+  assert.equal(addHardscape(state, 'wood').ok, false);
+});
 
 test('removing an individual preserves its tankmates and survives a reload', () => {
   const state = createInitialState();

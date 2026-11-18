@@ -1,6 +1,8 @@
-const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, screen, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { createUpdater, githubRequest } = require('./updates.cjs');
+const { stageAndLaunchInstaller, acknowledgeUpdateLaunch } = require('./update-installer.cjs');
 
 app.setName('Cyber Aquarium');
 const userDataPath = app.commandLine.getSwitchValue('user-data-dir') || path.join(app.getPath('appData'), 'Cyber Aquarium');
@@ -246,7 +248,10 @@ function createWindow() {
   aquariumWindow.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   aquariumWindow.webContents.session.setPermissionCheckHandler(() => false);
   updatePointerEvents();
-  aquariumWindow.once('ready-to-show', () => { aquariumWindow.showInactive(); sendState(true); });
+  aquariumWindow.once('ready-to-show', () => {
+    aquariumWindow.showInactive();
+    sendState(true);
+  });
   aquariumWindow.on('close', event => {
     if (!quitting) { event.preventDefault(); aquariumWindow.hide(); }
   });
@@ -269,9 +274,40 @@ function createWindow() {
 
 function bindIPC() {
   const trusted = event => aquariumWindow && event.sender === aquariumWindow.webContents && event.senderFrame === aquariumWindow.webContents.mainFrame;
+  const updater = createUpdater({
+    currentVersion: app.getVersion(),
+    platform: process.platform,
+    arch: process.arch,
+    isPackaged: app.isPackaged && !process.env.ELECTRON_RENDERER_URL,
+    request: (url, signal) => githubRequest(net, url, signal),
+    stagingRoot: path.join(userDataPath, 'update-downloads'),
+    executablePath: process.execPath,
+    userDataPath,
+    stageAndLaunchInstaller,
+    onState: state => {
+      if (aquariumWindow && !aquariumWindow.isDestroyed()) aquariumWindow.webContents.send('aquarium:update-state', state);
+    },
+    quit: () => app.quit(),
+  });
+  for (const [channel, action] of [
+    ['aquarium:get-update-state', updater.getState],
+    ['aquarium:check-update', updater.check],
+    ['aquarium:install-update', updater.install],
+  ]) {
+    ipcMain.handle(channel, event => {
+      if (!trusted(event)) throw new Error('Untrusted sender');
+      return action();
+    });
+  }
   ipcMain.handle('aquarium:info', event => {
     if (!trusted(event)) throw new Error('Untrusted sender');
-    return { ...shellState(true), platform: process.platform, version: app.getVersion(), gpuFeatures: app.getGPUFeatureStatus() };
+    return { ...shellState(true), platform: process.platform, version: app.getVersion(), gpuFeatures: app.getGPUFeatureStatus(),
+      verifyUpdateFrame: Boolean(process.env.CYBER_AQUARIUM_UPDATE_DIR && process.env.CYBER_AQUARIUM_UPDATE_TOKEN) };
+  });
+  ipcMain.on('aquarium:update-frame-ready', event => {
+    if (!trusted(event) || !process.env.CYBER_AQUARIUM_UPDATE_TOKEN) return;
+    const rollbackReason = acknowledgeUpdateLaunch();
+    if (rollbackReason) updater.reportRollback(rollbackReason);
   });
   for (const [channel, action] of [
     ['aquarium:always-on-top', setAlwaysOnTop],

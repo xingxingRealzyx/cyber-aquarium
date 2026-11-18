@@ -1,0 +1,30 @@
+import { PLANTS, HARDSCAPE, MAX_PLANTS, MAX_HARDSCAPE } from './simulation.js';
+
+export function sceneryPanel(state, expandedKind, escape) {
+  function section(title, items, catalog, category, limit) {
+    const plant = category === 'plant';
+    const unit = plant ? '丛' : '件';
+    const rows = Object.entries(catalog).map(([kind, entry]) => {
+      const placed = items.filter(item => (plant ? item.species : item.kind) === kind);
+      const expanded = expandedKind === kind;
+      const last = placed.at(-1);
+      const details = expanded && placed.length ? `<ul class="placed-items">
+        ${placed.map(item => {
+          const label = `${entry.name} #${String(item.slot + 1).padStart(2, '0')}`;
+          return `<li><span>${label}</span><button data-remove-${category}="${escape(item.id)}" aria-label="移出${label}">移出</button></li>`;
+        }).join('')}</ul>` : '';
+      return `<div class="scenery-row">
+        <div class="scenery-controls">
+          <button class="scenery-kind" data-show-kind="${kind}" aria-expanded="${expanded}" ${placed.length ? '' : 'disabled'}>
+            <strong>${entry.name}</strong><span>${placed.length} ${unit} <span aria-hidden="true">${expanded ? '▴' : '▾'}</span></span>
+          </button>
+          <button class="quantity" data-remove-${category}="${escape(last?.id)}" aria-label="减少一${unit}${entry.name}" title="移出最后加入的${entry.name}" ${last ? '' : 'disabled'}>−</button>
+          <button class="quantity" data-add-${category}="${kind}" aria-label="添加一${unit}${entry.name}" ${items.length >= limit ? 'disabled' : ''}>＋</button>
+        </div>${details}</div>`;
+    }).join('');
+    return `<div class="section-label"><span>${title}</span><span>${items.length} ${unit}</span></div><div class="scenery-list">${rows}</div>`;
+  }
+  return section('水草', state.plants, PLANTS, 'plant', MAX_PLANTS)
+    + section('石与沉木', state.hardscape, HARDSCAPE, 'hardscape', MAX_HARDSCAPE)
+    + '<p class="micro-note">点品种名称可按编号移出。水草在光照下吸收硝酸盐并产氧。</p>';
+}

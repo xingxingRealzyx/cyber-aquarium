@@ -1,9 +1,11 @@
 import './style.css';
 import { createAquarium } from './aquarium.js';
 import { advanceBehavior } from './behavior.js';
+import { sceneryPanel } from './scenery-panel.js';
 import {
   createInitialState, restoreState, advanceSimulation, addAnimal, addPlant, feed,
-  changeWater, removeAnimal, removeDead, getAssessment, SPECIES, PLANTS,
+  changeWater, removeAnimal, removeDead, getAssessment, SPECIES,
+  addHardscape, removeHardscape, removePlant,
 } from './simulation.js';
 
 const SAVE_KEY = 'chengjing.aquarium.v1';
@@ -40,8 +42,10 @@ try {
   saveError = true;
 }
 let panelOpen = false, activeTab = 'water', selectedId = null, autoRotate = false;
+let expandedKind = null, updateState = { phase: 'idle' }, lastPanelHTML = '';
 let pinned = false, compact = false, stats = { fps: 0 }, renderer;
 let desktopLayout=null, sentPointerInside=null;
+let verifyUpdateFrame=false;
 let pointerDown = false;
 let lastPointer = { x: -1, y: -1 };
 let toastTimeout, hoverTimeout, lastUI = 0, lastSave = 0, lastInspector = 0;
@@ -50,7 +54,7 @@ app.innerHTML = `
   <div id="hint" class="intro-hint">点击鱼看档案 · 拖动旋转<span>按住底部「移动」调整桌面位置</span></div>
   <aside id="panel" class="panel interactive" aria-label="鱼缸管理" hidden>
     <header><div><span class="eyebrow">YOUR LIVING AQUARIUM</span><h1>照料这一方水</h1></div><button class="icon-btn" data-action="close" aria-label="关闭面板">${icon('close')}</button></header>
-    <nav class="tabs" aria-label="管理分类"><button data-tab="water" class="active">水环境</button><button data-tab="life">生物</button><button data-tab="journal">日志</button></nav>
+    <nav class="tabs" aria-label="管理分类"><button data-tab="water" class="active">水环境</button><button data-tab="life">生物</button><button data-tab="scenery">造景</button><button data-tab="journal">日志</button></nav>
     <div id="panel-content" class="panel-content"></div>
     <footer><span id="render-stat">WebGL 2</span><span>60 L · 淡水生态</span></footer>
   </aside>
@@ -65,7 +69,7 @@ app.innerHTML = `
     <button type="button" class="drag-handle" title="按住这里移动整个鱼缸" aria-label="移动鱼缸">${icon('move')}<span>移动</span></button><i></i>
     <button data-action="feed" aria-label="投喂" title="投喂少量饲料">${icon('feed')}<span>投喂</span></button>
     <button data-action="water" aria-label="查看水质" title="水质与设备">${icon('drop')}<span>水质</span><em id="health-dot"></em></button>
-    <button data-action="life" aria-label="添加生物" title="添加鱼、水生物和水草">${icon('fish')}<span>生物</span></button><i></i>
+    <button data-action="life" aria-label="添加生物" title="管理鱼、水生物和造景">${icon('fish')}<span>生物</span></button><i></i>
     <button data-action="rotate" aria-label="自动旋转" title="自动环绕">${icon('rotate')}</button>
     <button data-action="settings" aria-label="鱼缸设置" title="鱼缸设置">${icon('sliders')}</button>
   </div><div class="dock-caption">点击鱼看档案 · 拖动旋转 · 滚轮缩放</div></div>
@@ -133,44 +137,82 @@ function lifePanel() {
     </button>`).join('');
   return `<div class="section-label"><span>水下居民</span><span>${alive.length} 存活${dead.length?` · ${dead.length} 死亡`:''}</span></div>
     <div class="species-grid">${speciesCards}</div>
-    <div class="section-label"><span>栽种水草</span><span>${state.plants.length} 株</span></div>
-    <div class="plant-list">${Object.entries(PLANTS).map(([key,pl])=>`<button data-add-plant="${key}" ${state.plants.length>=35?'disabled':''}><span class="plant-icon">${icon('leaf')}</span><span><b>${escape(pl.name)}</b><small>${escape(pl.latin)}</small></span><span>＋</span></button>`).join('')}</div>
-    <p class="micro-note">水草消耗硝酸盐，开灯时产氧，关灯后也会呼吸。增加生物会提高过滤与供氧负荷。</p>
+    <button class="wide-btn" data-action="scenery">${icon('leaf')} 管理水草与造景</button>
     ${dead.length?`<button class="danger-btn" data-action="remove-dead">移除 ${dead.length} 只死亡生物</button><p class="micro-note">未移除的尸体会腐败并污染水体。</p>`:''}
     <div class="section-label"><span>个体状态</span><span>点击鱼也可查看</span></div>
     <div class="residents">${state.animals.map(a=>`<button class="resident ${a.id===selectedId?'selected':''}" data-select="${escape(a.id)}"><span class="resident-dot ${a.species} ${!a.alive?'dead':''}"></span><span class="resident-name">${escape(animalLabel(a))}<small>${behaviorLabel(a)}</small></span><span class="resident-vitals"><span class="${a.health<50?'warning':''}">健康 ${Math.round(a.health)}%</span><small class="${a.hunger>70?'warning':''}">饥饿 ${Math.round(a.hunger)}%</small></span></button>`).join('')}</div>`;
+}
+function updateControls() {
+  if (!desktop?.checkForUpdate) return '';
+  const {phase, currentVersion, latestVersion, progress = 0, message} = updateState;
+  const version = currentVersion ? `v${escape(currentVersion)}` : '';
+  const available = phase === 'available';
+  const busy = ['checking','downloading','installing'].includes(phase);
+  const labels = {checking:'正在检查…', downloading:`正在下载 · ${progress}%`, installing:'正在安装…', available:'下载并重启更新'};
+  const status = {current:'当前已是最新版本', available:`发现新版本 v${latestVersion}`, installing:'正在安装，完成后鱼缸会重新打开。', error:message}[phase];
+  return `<section class="update-control" aria-label="软件更新">
+    <div class="section-label"><span>软件更新</span><span>${version}</span></div>
+    ${status ? `<p class="update-status" role="status">${escape(status)}</p>` : ''}
+    ${phase === 'downloading' ? `<progress aria-label="更新下载进度" value="${progress}" max="100"></progress>` : ''}
+    <button class="${available ? 'primary-btn' : 'wide-btn'}" data-action="${available ? 'install-update' : 'check-update'}" ${busy ? 'disabled' : ''}>${labels[phase] || '检查更新'}</button>
+  </section>`;
+}
+function applyUpdateState(value) {
+  if (!value) return;
+  updateState = value;
+  if (value.phase === 'installing') persist();
+  if (panelOpen && activeTab === 'journal') updatePanel();
+}
+async function runUpdate(install) {
+  if (install) persist();
+  try {
+    applyUpdateState(await (install ? desktop.installUpdate() : desktop.checkForUpdate()));
+  } catch {
+    applyUpdateState({...updateState, phase:'error', message:'更新服务暂时不可用，请再试一次。'});
+  }
 }
 function journalPanel() {
   return `<div class="time-card"><span class="eyebrow">AQUARIUM TIME</span><strong>${timeLabel(state.elapsedHours)}</strong><p>游动与生态时间独立，陪伴按自己的节奏。</p></div>
     <div class="section-label"><span>生态时间流速</span><button class="text-btn" data-action="pause">${state.paused?'继续模拟':'暂停模拟'}</button></div>
     <div class="speed-options">${[[1,'实时'],[60,'60×'],[3600,'3600×']].map(([v,label])=>`<button data-speed="${v}" class="${state.speed===v?'selected':''}">${label}</button>`).join('')}</div>
     <p class="micro-note">${state.speed===1?'现实 1 小时 = 缸内 1 小时。':state.speed===60?'现实 1 秒 = 缸内 1 分钟。':'现实 1 秒 = 缸内 1 小时；请留意水质和饥饿。'}${state.paused?' 当前已暂停生态演化。':''}关闭应用后生态暂停。</p>
+    ${updateControls()}
     <div class="section-label"><span>桌面摆放</span><span>${desktop?'原生透明桌面':'浏览器预览'}</span></div>
     <div class="desktop-actions"><button class="secondary-btn ${pinned?'selected':''}" data-action="pin">${icon('pin')}${pinned?'已置顶':'置顶显示'}</button><button class="secondary-btn" data-action="compact">${icon('expand')}${compact?'标准大小':'小巧模式'}</button></div>
     <button class="wide-btn" data-action="reset-view">${icon('rotate')} 重置观察角度</button>
     ${desktop?`<button class="wide-btn" data-action="click-through">穿透鼠标 · 在${trayLocation}鱼图标中恢复</button>`:''}
     <div class="section-label"><span>生态日志</span><span>自动保存</span></div>
     <div class="event-list">${state.events.slice(0,15).map(e=>`<article class="event ${escape(e.type)}"><span></span><div><small>${timeLabel(e.time)}</small><p>${escape(e.message)}</p></div></article>`).join('')||'<p class="micro-note">一方新的小世界，正在慢慢醒来。</p>'}</div>
-    <details class="model-note"><summary>关于这只鱼缸</summary><p>澄境 v0.5 · GPU 实时 3D 渲染。水质遵循简化的氮循环、溶氧和温度模型；毒性随 pH 和温度变化，健康会累积损伤，鱼也会因缺氧、毒性与饥饿死亡。</p><p>每只生物都有独立状态；饲料需要实际接触才能被吃到。游动节奏保持自然，生态时间可独立加速。</p><p>这是生态模拟原型，参数经过玩法标定，并非真实养鱼的水质预测工具。当前不模拟疾病、繁殖与品种间攻击。进度仅保存在此设备。</p><p>所有含氮读数统一以氮计，mg N/L。开关灯为手动，默认成熟滤菌缸。</p></details>`;
+    <details class="model-note"><summary>关于这只鱼缸</summary><p>鱼缸由 GPU 实时渲染。水质遵循简化的氮循环、溶氧和温度模型；毒性随 pH 和温度变化，健康会累积损伤，鱼也会因缺氧、毒性与饥饿死亡。</p><p>每只生物都有独立状态；饲料需要实际接触才能被吃到。游动节奏保持自然，生态时间可独立加速。</p><p>这是生态模拟原型，参数经过玩法标定，并非真实养鱼的水质预测工具。当前不模拟疾病、繁殖与品种间攻击。进度仅保存在此设备。</p><p>所有含氮读数统一以氮计，mg N/L。开关灯为手动，默认成熟滤菌缸。</p></details>`;
 }
 function updatePanel() {
   const assessment=getAssessment(state);
   $('#health-dot').className=assessment.level;
   $('#render-stat').textContent=`WebGL 2 · ${Math.round(stats.fps||0)} FPS`;
   if (panelOpen && !(document.activeElement?.type==='range' && document.activeElement.matches(':active'))) {
-    const content=$('#panel-content'), scroll=content.scrollTop, focusedId=document.activeElement?.id;
-    content.innerHTML=activeTab==='water'?waterPanel():activeTab==='life'?lifePanel():journalPanel();
-    content.scrollTop=scroll;
-    if(focusedId==='temperature') content.querySelector('#temperature')?.focus({preventScroll:true});
+    const content=$('#panel-content'), scroll=content.scrollTop, focused=document.activeElement;
+    const html = activeTab === 'scenery' ? sceneryPanel(state, expandedKind, escape)
+      : activeTab === 'water' ? waterPanel() : activeTab === 'life' ? lifePanel() : journalPanel();
+    if(html !== lastPanelHTML && !(pointerDown && content.contains(focused))) {
+      const focusKey = content.contains(focused) && focused.getAttributeNames().find(name => name.startsWith('data-'));
+      const focusSelector = focusKey ? `[${focusKey}="${CSS.escape(focused.getAttribute(focusKey))}"]`
+        : focused?.id === 'temperature' ? '#temperature' : null;
+      content.innerHTML=html;
+      lastPanelHTML=html;
+      content.scrollTop=scroll;
+      if(focusSelector) content.querySelector(focusSelector)?.focus({preventScroll:true});
+    }
   }
   updateInspector();
 }
 function openPanel(tab=activeTab) {
+  const changed = activeTab !== tab;
   panelOpen=true; activeTab=tab;
   $('#panel').hidden=false;
   document.body.classList.add('panel-open','hovering');
-  document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
+  document.querySelectorAll('.tabs [data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));
   updatePanel();
+  if(changed) $('#panel-content').scrollTop=0;
   updatePointerPosition(lastPointer);
 }
 function closePanel() {
@@ -217,7 +259,9 @@ function perform(action) {
   if(action==='close') closePanel();
   else if(action==='water') openPanel('water');
   else if(action==='life') openPanel('life');
+  else if(action==='scenery') openPanel('scenery');
   else if(action==='settings') openPanel('journal');
+  else if(action==='check-update' || action==='install-update') return void runUpdate(action==='install-update');
   else if(action==='feed') { const result=feed(state); notify(result.ok?(state.paused?'饲料已入水 · 继续模拟后鱼会进食':'饲料已入水 · 饥饿的鱼会主动靠近进食'):result.message); }
   else if(action==='change-water') { changeWater(state,.25); notify('已更换 25% 水 · 使用等温、除氯新水'); }
   else if(action==='remove-animal') {
@@ -241,7 +285,15 @@ app.addEventListener('click', e=>{
   else if(b.dataset.tab) openPanel(b.dataset.tab);
   else if(b.dataset.equipment) { const key=b.dataset.equipment; state.equipment[key]=!state.equipment[key]; updatePanel(); persist(); }
   else if(b.dataset.addAnimal) { if(state.animals.filter(a=>a.alive).length>=40) return; const result=addAnimal(state,b.dataset.addAnimal); notify(result.message); updatePanel(); persist(); }
-  else if(b.dataset.addPlant) { if(state.plants.length>=35) return; const result=addPlant(state,b.dataset.addPlant); notify(result.message); updatePanel(); persist(); }
+  else if(b.dataset.showKind) { expandedKind = expandedKind === b.dataset.showKind ? null : b.dataset.showKind; updatePanel(); }
+  else if(b.dataset.addPlant || b.dataset.removePlant || b.dataset.addHardscape || b.dataset.removeHardscape) {
+    const {addPlant: plant, removePlant: plantId, addHardscape: kind, removeHardscape: itemId} = b.dataset;
+    const result = plant ? addPlant(state, plant) : plantId ? removePlant(state, plantId)
+      : kind ? addHardscape(state, kind) : removeHardscape(state, itemId);
+    notify(result.message);
+    if(result.ok) persist();
+    updatePanel();
+  }
   else if(b.dataset.speed) { state.speed=Number(b.dataset.speed); updatePanel(); persist(); }
   else if(b.dataset.select) selectAnimal(b.dataset.select);
 });
@@ -342,8 +394,16 @@ function applyShellState(info) {
 }
 if(desktop) {
   let receivedState=false;
+  if (desktop.getUpdateState) {
+    let receivedUpdate = false;
+    desktop.onUpdateState(value => {receivedUpdate = true; applyUpdateState(value);});
+    desktop.getUpdateState().then(value => {if (!receivedUpdate) applyUpdateState(value);}).catch(()=>{});
+  }
   desktop.onState(info=>{receivedState=true;applyShellState(info);});
-  desktop.getInfo().then(info=>{if(!receivedState) applyShellState(info);}).catch(()=>{});
+  desktop.getInfo().then(info=>{
+    verifyUpdateFrame=Boolean(info.verifyUpdateFrame);
+    if(!receivedState) applyShellState(info);
+  }).catch(()=>{});
 }
 
 try {
@@ -362,6 +422,11 @@ try {
     if(!state.paused) advanceSimulation(state,dt*state.speed/3600);
     advanceBehavior(state,dt);
     renderer.update(state,dt,elapsed);
+    if (verifyUpdateFrame && document.visibilityState === 'visible' &&
+        renderer.renderer.domElement.style.visibility !== 'hidden' && renderer.renderer.info.render.triangles > 0 && !gl.isContextLost()) {
+      verifyUpdateFrame=false;
+      desktop.confirmUpdateFrame();
+    }
     // Camera motion can move the glass across a stationary desktop cursor.
     if(desktop && now-lastHitTest>100) {updatePointerPosition(lastPointer);lastHitTest=now;}
     if(selectedId&&now-lastInspector>200){updateInspector();lastInspector=now;}

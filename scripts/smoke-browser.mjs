@@ -25,9 +25,25 @@ try{
   assert.ok((await page.evaluate(()=>window.aquariumDiagnostics.state.food))>0);
   await page.getByRole('button',{name:'添加生物',exact:true}).click();
   await page.locator('[data-add-animal="neon"]').click();
+  await page.locator('[data-action="scenery"]').click();
   await page.locator('[data-add-plant="moss"]').click();
+  const addedPlants=await page.evaluate(()=>window.aquariumDiagnostics.state.plants.map(p=>p.id));
+  await page.locator('[data-add-plant="moss"]').click();
+  await page.getByRole('button',{name:'减少一丛爪哇莫丝'}).click();
+  assert.deepEqual(await page.evaluate(()=>window.aquariumDiagnostics.state.plants.map(p=>p.id)),addedPlants);
+  const initialScenery=await page.evaluate(()=>window.aquariumDiagnostics.state.hardscape);
+  for (const kind of ['wood','stone']) {
+    await page.locator(`[data-add-hardscape="${kind}"]`).click();
+    await page.locator(`[data-show-kind="${kind}"]`).click();
+    const item=initialScenery.find(item=>item.kind===kind);
+    await page.locator(`.placed-items [data-remove-hardscape="${item.id}"]`).click();
+    const pieces=await page.evaluate(()=>window.aquariumDiagnostics.state.hardscape);
+    assert.equal(pieces.filter(piece=>piece.kind===kind).length,initialScenery.filter(piece=>piece.kind===kind).length);
+    assert.ok(!pieces.some(piece=>piece.id===item.id));
+  }
   assert.equal((await page.evaluate(()=>window.aquariumDiagnostics.state.animals.length)),13);
   assert.equal((await page.evaluate(()=>window.aquariumDiagnostics.state.plants.length)),10);
+  await page.locator('[data-tab="life"]').click();
   await page.locator('[data-select]').first().click();
   assert.equal(await page.locator('#inspector').isVisible(),true);
   await page.locator('[data-tab="water"]').click();
@@ -46,6 +62,7 @@ try{
   await page.waitForFunction(()=>window.aquariumDiagnostics?.stats.fps>0);
   const restored=await page.evaluate(()=>window.aquariumDiagnostics.state);
   assert.equal(restored.animals.length,13); assert.equal(restored.plants.length,10);
+  assert.deepEqual(restored.hardscape,saved.hardscape);
   assert.equal(restored.speed,3600); assert.equal(restored.paused,true);
   assert.equal(restored.equipment.aerator,false);
   assert.equal(restored.animals[0].id,saved.animals[0].id);
@@ -58,7 +75,7 @@ try{
   await page.getByRole('button',{name:'查看水质',exact:true}).click();
   await page.screenshot({path:'artifacts/aquarium-controls.png',omitBackground:true});
   assert.deepEqual(errors,[],'no JavaScript or shader errors');
-  const report={passed:true,checks:['transparent background','WebGL renderer','hidden controls','feeding','add fish and plants','individual inspection','water change','equipment controls','clock and pause','persistence'],stats:await page.evaluate(()=>window.aquariumDiagnostics.stats),errors};
+  const report={passed:true,checks:['transparent background','WebGL renderer','hidden controls','feeding','add fish and plants','edit individual plants and hardscape','individual inspection','water change','equipment controls','clock and pause','persistence'],stats:await page.evaluate(()=>window.aquariumDiagnostics.stats),errors};
   await writeFile('artifacts/smoke-browser.json',JSON.stringify(report,null,2));
   console.log(JSON.stringify(report,null,2));
 }finally{await browser.close();}

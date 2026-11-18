@@ -1,6 +1,6 @@
 import { packager } from '@electron/packager';
 import { execFileSync } from 'node:child_process';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -62,6 +62,16 @@ if (mac) {
   // Preserve executable bits and the symlinks in Electron Framework.framework.
   execFileSync('/usr/bin/ditto', ['-c', '-k', '--keepParent', app, archive], { stdio: 'inherit' });
 } else {
+  // A portable installation may share its directory with user files. The updater
+  // needs the exact package inventory to replace and retire only our own files.
+  const manifest = 'resources/update-files.json';
+  const files = [manifest];
+  for (const entry of await readdir(output, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    const relative = path.relative(output, path.join(entry.parentPath, entry.name)).split(path.sep).join('/');
+    if (relative !== manifest) files.push(relative);
+  }
+  await writeFile(path.join(output, manifest), JSON.stringify(files.sort()));
   const tar = path.join(process.env.SystemRoot, 'System32', 'tar.exe');
   execFileSync(tar, ['-a', '-cf', archive, '-C', output, '.'], { stdio: 'inherit' });
 }

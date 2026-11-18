@@ -27,8 +27,14 @@ export const PLANTS = Object.freeze({
   moss: { name: '爪哇莫丝', latin: 'Taxiphyllum barbieri', uptake: 0.7 },
 });
 
+export const HARDSCAPE = Object.freeze({
+  stone: { name: '溪石', starterCount: 12 },
+  wood: { name: '沉木', starterCount: 5 },
+});
+
 const MAX_ANIMALS = 80;
-const MAX_PLANTS = 40;
+export const MAX_PLANTS = 40;
+export const MAX_HARDSCAPE = 40;
 export const MAX_FOOD_PELLETS = 160;
 const STEP = 1 / 12;
 let sequence = 0;
@@ -108,8 +114,15 @@ export function consumePellet(state, animalId, pelletId) {
   return { ok: true, grams: amount };
 }
 
-function plant(species) {
-  return { id: key('plant'), species, biomass: 1, seed: Math.random() };
+function availableSlot(used, preferred, limit) {
+  if (Number.isInteger(preferred) && preferred >= 0 && preferred < limit && !used.has(preferred)) return preferred;
+  let slot = 0;
+  while (used.has(slot)) slot++;
+  return slot;
+}
+
+function plant(species, slot) {
+  return { id: key('plant'), species, slot, biomass: 1, seed: Math.random() };
 }
 
 /** Equilibrium fraction, freshwater Emerson formulation (temperature in °C). */
@@ -124,7 +137,10 @@ export function createInitialState() {
     water: { temperature: 25, ph: 7.2, ammonia: 0.015, nitrite: 0.008, nitrate: 5, oxygen: 7.8, clarity: 0.98, unionizedAmmonia: 0 },
     equipment: { filter: true, aerator: true, light: true, heater: true, targetTemperature: 25 },
     animals: ['neon', 'neon', 'neon', 'neon', 'neon', 'neon', 'guppy', 'guppy', 'guppy', 'shrimp', 'shrimp', 'snail'].map((species,index) => animal(species,index + 1)),
-    plants: ['vallisneria', 'vallisneria', 'vallisneria', 'vallisneria', 'anubias', 'anubias', 'anubias', 'moss', 'moss'].map(plant),
+    plants: Object.entries({ vallisneria: 4, anubias: 3, moss: 2 })
+      .flatMap(([species, count]) => Array.from({ length: count }, (_, slot) => plant(species, slot))),
+    hardscape: Object.entries(HARDSCAPE).flatMap(([kind, { starterCount }]) =>
+      Array.from({ length: starterCount }, (_, slot) => ({ id: key('scenery'), kind, slot }))),
     bacteria: { ammonia: 1, nitrite: 1 }, food: 0, foodPellets: [], detritus: 0.01,
     nextAnimalNumber: 13, behaviorSeconds: 0,
     alkalinity: 4, events: [], history: [], lastFedHours: null, lastWaterChangeHours: 0,
@@ -156,10 +172,39 @@ export function removeAnimal(state, id) {
 export function addPlant(state, species) {
   if (!Object.hasOwn(PLANTS, species)) return { ok: false, message: '未知水草种类' };
   if (state.plants.length >= MAX_PLANTS) return { ok: false, message: `最多种植 ${MAX_PLANTS} 丛水草。` };
-  const added = plant(species);
+  const used = new Set(state.plants.filter(item => item.species === species).map(item => item.slot));
+  const added = plant(species, availableSlot(used, null, MAX_PLANTS));
   state.plants.push(added);
   record(state, `种下 1 丛${PLANTS[species].name}。`);
   return { ok: true, plant: added, message: `已种下${PLANTS[species].name}` };
+}
+
+export function addHardscape(state, kind) {
+  if (!Object.hasOwn(HARDSCAPE, kind)) return { ok: false, message: '未知造景种类' };
+  if (state.hardscape.length >= MAX_HARDSCAPE) return { ok: false, message: `最多放置 ${MAX_HARDSCAPE} 件造景。` };
+  const used = new Set(state.hardscape.filter(item => item.kind === kind).map(item => item.slot));
+  const added = { id: key('scenery'), kind, slot: availableSlot(used, null, MAX_HARDSCAPE) };
+  state.hardscape.push(added);
+  const message = `已放入${HARDSCAPE[kind].name} #${added.slot + 1}`;
+  record(state, message);
+  return { ok: true, item: added, message };
+}
+
+function removeSceneryItem(state, items, id, label) {
+  const index = items.findIndex(item => item.id === id);
+  if (index < 0) return { ok: false, message: '该物件已不在缸中' };
+  const [item] = items.splice(index, 1);
+  const message = `已移出${label(item)} #${item.slot + 1}`;
+  record(state, message);
+  return { ok: true, message };
+}
+
+export function removePlant(state, id) {
+  return removeSceneryItem(state, state.plants, id, plant => PLANTS[plant.species].name);
+}
+
+export function removeHardscape(state, id) {
+  return removeSceneryItem(state, state.hardscape, id, item => HARDSCAPE[item.kind].name);
 }
 
 /** Adds dry food in grams. Excess remains in the tank, consuming oxygen as it decays. */
@@ -394,13 +439,30 @@ export function restoreState(raw) {
   }
   if (Array.isArray(data.plants)) {
     const usedIds = new Set();
+    const slots = new Map(Object.keys(PLANTS).map(kind => [kind, new Set()]));
     base.plants = data.plants.filter(p => p && Object.hasOwn(PLANTS, p.species)).slice(0, MAX_PLANTS).map(p => {
-      const restored = plant(p.species);
-      if (typeof p.id === 'string' && p.id.length <= 100 && !usedIds.has(p.id)) restored.id = p.id;
+      const used = slots.get(p.species);
+      // Older versions placed plants by species and array order. Freeze those beds on migration.
+      const restored = plant(p.species, availableSlot(used, p.slot, MAX_PLANTS));
+      used.add(restored.slot);
+      if (typeof p.id === 'string' && p.id.length > 0 && p.id.length <= 100 && !usedIds.has(p.id)) restored.id = p.id;
       usedIds.add(restored.id);
       restored.biomass = numeric(p.biomass, 1, 0.15, 2.2);
       restored.seed = numeric(p.seed, restored.seed, 0, 1);
       return restored;
+    });
+  }
+  if (Array.isArray(data.hardscape)) {
+    const usedIds = new Set();
+    const slots = new Map(Object.keys(HARDSCAPE).map(kind => [kind, new Set()]));
+    base.hardscape = data.hardscape.filter(item => item && Object.hasOwn(HARDSCAPE, item.kind)).slice(0, MAX_HARDSCAPE).map(item => {
+      const used = slots.get(item.kind);
+      const slot = availableSlot(used, item.slot, MAX_HARDSCAPE);
+      used.add(slot);
+      const validId = typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 100 && !usedIds.has(item.id);
+      const id = validId ? item.id : key('scenery');
+      usedIds.add(id);
+      return { id, kind: item.kind, slot };
     });
   }
   base.nextAnimalNumber = Math.max(Math.round(numeric(data.nextAnimalNumber,1,1,1e8)),...base.animals.map(a=>a.serial+1),1);

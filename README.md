@@ -6,12 +6,16 @@
 
 ## 下载桌面版
 
-登录 GitHub，打开最近一次成功的构建。在运行详情底部的 **Artifacts** 中，下载适合自己电脑的压缩包。[Windows 和 macOS 构建记录](https://github.com/xingxingRealzyx/cyber-aquarium/actions/workflows/desktop.yml)
+打开最新正式版，下载适合自己电脑的压缩包。[GitHub Releases](https://github.com/xingxingRealzyx/cyber-aquarium/releases/latest)
 
 | 平台 | 下载 | 启动 |
 | --- | --- | --- |
 | Windows x64 | `Cyber-Aquarium-windows-x64.zip` | 将整个压缩包解压到同一文件夹，双击其中的 `Cyber Aquarium.exe`。 |
 | macOS Apple Silicon | `Cyber-Aquarium-macos-arm64.zip` | 解压后将 `Cyber Aquarium.app` 拖入「应用程序」并打开。 |
+
+从 v0.6.0 起，点底部齿轮，在「软件更新」中点「检查更新」。发现新版本后点「下载并重启更新」，应用会校验下载包、安装并重新打开，沿用本机鱼缸存档。v0.5.2 及更早版本首次升级需从上面的发布页下载。
+
+直接更新需要安装目录可写。在 Mac 上可使用个人目录下的「应用程序」，在 Windows 上可将便携版完整解压到自己的文件夹。如果更新途中断电，重新开机后可双击应用旁的 `Recover Cyber Aquarium.command`（Mac）或 `Recover Cyber Aquarium.cmd`（Windows）恢复原版。
 
 两个平台都使用 GPU 渲染，需要支持 WebGL 2 的显卡和驱动。Windows 版通过 Chromium 的 ANGLE 调用显卡，通常使用 Direct3D 11。在「水质」面板底部，将鼠标悬停在 **WebGL 2 · FPS** 上，可以查看当前鱼缸所用的图形适配器。Windows 构建日志也会记录 CI 机器实际使用的适配器与后端。macOS 构建使用本地临时签名，首次打开时系统可能提示验证开发者。
 
@@ -24,7 +28,8 @@
 | 把鱼缸挪到桌角 | 鼠标移到缸体上，按住底部工具栏的「移动」拖到新位置。 |
 | 看一条鱼有没有吃饱 | 点鱼打开个体档案，再点「投喂全缸」。观察它追食后的饥饿度、上次进食时间和累计摄食量。 |
 | 移出一条鱼 | 点选那条鱼，在个体档案最下方点「移出鱼缸」。操作会立即保存，日志里可以查到移出的个体编号。 |
-| 加鱼或种草 | 点「生物」，从品种预览中选择鱼、虾、螺或水草。 |
+| 加鱼、虾或螺 | 点「生物」，从品种预览中选择。 |
+| 增减水草和造景 | 点「生物」→「造景」，在苦草、小水榕、爪哇莫丝、溪石或沉木旁点 ＋ 或 −。减号移出最后加入的一件，也可以展开品种，按编号移出指定的一件。 |
 | 临时收起或恢复操作 | 点击菜单栏（macOS）或系统托盘（Windows）的鱼形图标。开启鼠标穿透后，可从这里选择「显示鱼缸 / 恢复操作」。 |
 
 ## 水下居民

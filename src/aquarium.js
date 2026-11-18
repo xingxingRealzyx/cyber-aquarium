@@ -175,7 +175,8 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   tank.add(substrate);
   const dummy = new THREE.Object3D();
 
-  tank.add(createHardscape(sceneryLoader));
+  const hardscape = createHardscape(sceneryLoader);
+  tank.add(hardscape.group);
 
   const filterGroup=new THREE.Group();tank.add(filterGroup);
   const filterMat=material('#273731',{roughness:.65});
@@ -318,7 +319,8 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     waterTintMat.opacity=.022+(1-clarity)*.21;
     waterTintMat.color.set(clarity>.5?'#6ca781':'#8c9958');
     particleMat.opacity=.15+(1-clarity)*.36;
-    const signature=(state.plants||[]).map(p=>`${p.id}:${p.species}:${Math.round((p.biomass??1)*4)}`).join('|');
+    hardscape.update(state.hardscape || []);
+    const signature=(state.plants||[]).map(p=>`${p.id}:${p.species}:${p.slot}:${Math.round((p.biomass??1)*4)}`).join('|');
     if(signature!==plantsSignature){plantsSignature=signature;rebuildPlants(state.plants||[]);}
     const currentIds=new Set();
     for(const animal of state.animals||[]){

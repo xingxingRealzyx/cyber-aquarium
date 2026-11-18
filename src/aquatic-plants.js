@@ -303,17 +303,14 @@ function moss(batch, x, z, growth, rng) {
   }
 }
 
-function foreground(batch) {
-  const rng = randomStream('rooted marginal grasses');
-  for (const [x,z] of [[-3.35,.92],[-2.9,1.13],[-2.2,1.33],[-.92,.77],[1.29,.88],[2.51,1.38],[3.14,.96],[3.16,-.23],[-3.24,-.23]]) {
-    for (let i = 0; i < 7; i++) {
-      const rx = x + (rng() - .5) * .52, rz = z + (rng() - .5) * .43;
-      const root = v3(rx, substrateHeight(rx,rz) - .015, rz);
-      const height = .085 + rng() * .13;
-      for (let j = 0; j < 5; j++) {
-        const a = rng() * TAU, h = height * (.6 + rng() * .7);
-        grassBlade(batch, root, h, .008 + rng() * .012, a, Math.sin(a)*h*.65, Math.cos(a)*h*.65, rng, true);
-      }
+function youngShoots(batch, x, z, rng) {
+  for (let i = 0; i < 7; i++) {
+    const rx = x + (rng() - .5) * .52, rz = z + (rng() - .5) * .43;
+    const root = v3(rx, substrateHeight(rx,rz) - .015, rz);
+    const height = .085 + rng() * .13;
+    for (let j = 0; j < 5; j++) {
+      const a = rng() * TAU, h = height * (.6 + rng() * .7);
+      grassBlade(batch, root, h, .008 + rng() * .012, a, Math.sin(a)*h*.65, Math.cos(a)*h*.65, rng, true);
     }
   }
 }
@@ -321,19 +318,19 @@ function foreground(batch) {
 export function createAquaticPlants(plants, time, manager) {
   const group = new THREE.Group();
   group.name = 'Aquatic vegetation';
+  if (!plants.length) return group;
   const batch = new PlantMesh();
-  const counts = { vallisneria: 0, anubias: 0, moss: 0 };
   const grow = { vallisneria, anubias, moss };
   for (const plant of plants) {
     const kind = Object.hasOwn(grow, plant.species) ? plant.species : 'vallisneria';
-    const rng = randomStream(plant.seed ?? plant.id ?? counts[kind]);
-    const position = initialBeds[kind][counts[kind]++];
+    const rng = randomStream(plant.seed ?? plant.id);
+    const position = initialBeds[kind][plant.slot];
     const x = position?.[0] ?? (rng() - .5) * 6.4;
     const z = position?.[1] ?? (kind === 'vallisneria' ? -1.39 + rng() * .63 : (rng() - .43) * 2.8);
     const size = clamp(Math.cbrt(plant.biomass ?? 1), .54, 1.25);
     grow[kind](batch, x, z, size, rng);
+    if (kind === 'vallisneria') youngShoots(batch, x, z + .3, rng);
   }
-  foreground(batch);
   const { material, depth } = leafMaterials(time, manager);
   const leaves = new THREE.Mesh(batch.finish(), material);
   leaves.name = 'Textured leaves, stems and moss';

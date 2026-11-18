@@ -10,6 +10,11 @@ function subscribe(channel, callback) {
 contextBridge.exposeInMainWorld('aquariumDesktop', Object.freeze({
   platform: process.platform,
   getInfo: () => ipcRenderer.invoke('aquarium:info'),
+  getUpdateState: () => ipcRenderer.invoke('aquarium:get-update-state'),
+  checkForUpdate: () => ipcRenderer.invoke('aquarium:check-update'),
+  installUpdate: () => ipcRenderer.invoke('aquarium:install-update'),
+  onUpdateState: callback => subscribe('aquarium:update-state', callback),
+  confirmUpdateFrame: () => ipcRenderer.send('aquarium:update-frame-ready'),
   setAlwaysOnTop: value => ipcRenderer.invoke('aquarium:always-on-top', Boolean(value)),
   setClickThrough: value => ipcRenderer.invoke('aquarium:click-through', Boolean(value)),
   setCompact: value => ipcRenderer.invoke('aquarium:compact', Boolean(value)),
