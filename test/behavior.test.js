@@ -114,6 +114,66 @@ test('water changes and particle caps conserve food mass without deleting old le
   changeWater(state,1);assert.equal(state.food,0);assert.equal(state.foodPellets.length,0);
 });
 
+test('feeding a full legacy bed preserves every settled grain and adds fresh surface food', () => {
+  const original = createInitialState();
+  original.animals = [];
+  for (let i = 0; i < 5; i++) feed(original);
+  run(original, 45);
+  // v0.6.1 could have all 160 slots occupied by settled pellets.
+  const bed = original.foodPellets.map(({id,x,y,z,mass,seed,ageSeconds}) => ({id,x,y,z,mass,seed,ageSeconds}));
+  assert.equal(bed.length, 160);
+  assert.ok(bed.every(p => Math.abs(p.y - substrateHeight(p.x,p.z) - .04) < .002));
+  const state = restoreState({ version:1, animals:[], foodPellets:bed });
+  const oldIds = new Set(bed.map(p => p.id));
+  feed(state);
+  const byId = new Map(state.foodPellets.map(p => [p.id,p]));
+  for (const p of bed) {
+    const grain = byId.get(p.id);
+    assert.ok(grain, `feeding removed settled pellet ${p.id}`);
+    assert.deepEqual([grain.x,grain.y,grain.z,grain.mass], [p.x,p.y,p.z,p.mass]);
+  }
+  const fresh = state.foodPellets.filter(p => !oldIds.has(p.id));
+  assert.ok(fresh.length > 0 && fresh.every(p => p.y > 3.8));
+  nearly(fresh.reduce((sum,p) => sum + p.mass, 0), .08);
+  run(state, 5);
+  assert.ok(fresh.every(p => p.y < 3.6), 'fresh pellets actually sink above the full bed');
+  nearly(state.food, .48);
+});
+
+test('rapid feeding preserves underwater grains through congestion, save and eventual settling', () => {
+  const state = createInitialState();
+  state.animals = [];
+  for (let i = 0; i < 5; i++) feed(state);
+  run(state, 45);
+  const bed = structuredClone(state.foodPellets);
+  for (let i = 0; i < 5; i++) feed(state);
+  run(state, 8);
+  const submerged = structuredClone(state.foodPellets);
+  assert.ok(submerged.some(p => p.y > 1 && p.y < 3.5), 'there is food partway down the water column');
+
+  for (let i = 0; i < 24; i++) feed(state, 5);
+  const byId = new Map(state.foodPellets.map(p => [p.id,p]));
+  for (const p of submerged) assert.deepEqual(byId.get(p.id), p, 'a new feed must only affect surface food');
+  assert.ok(state.foodPellets.some(p => p.y > 3.8));
+  assert.ok(state.foodPellets.length <= MAX_FOOD_PELLETS);
+  nearly(state.food, 120.8);
+  const restored = restoreState(JSON.stringify(state));
+  assert.deepEqual(restored.foodPellets, state.foodPellets);
+  nearly(restored.food, state.food);
+
+  run(restored, 100);
+  assert.ok(restored.foodPellets.every(p => Math.abs(p.y - substrateHeight(p.x,p.z) - .04) < .002));
+  const settled = new Map(restored.foodPellets.map(p => [p.id,p]));
+  for (const p of bed) {
+    const grain = settled.get(p.id);
+    assert.ok(grain, 'arriving food preserves the established bed');
+    assert.deepEqual([grain.x,grain.y,grain.z], [p.x,p.y,p.z]);
+    assert.ok(grain.mass >= p.mass);
+  }
+  nearly(sumFood(restored), 120.8);
+  nearly(restored.food, 120.8);
+});
+
 test('old saves preserve IDs and health/hunger while migrating bulk leftovers',()=>{
   const state=createInitialState();const a=state.animals[0];a.health=63;a.hunger=89;
   const old={version:1,elapsedHours:55,food:.043,animals:[{id:a.id,species:a.species,seed:a.seed,health:a.health,hunger:a.hunger,alive:true}],plants:[]};

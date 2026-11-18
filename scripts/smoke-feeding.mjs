@@ -155,10 +155,45 @@ try {
   await clickSwimmingFish(hungryId);
   assert.equal(await page.locator('#inspector').getAttribute('data-animal-id'), hungryId);
   await page.screenshot({ path: 'artifacts/feeding-individual.png', omitBackground: true });
+
+  const bottomFixture = await page.evaluate(async () => {
+    const { createInitialState, feed } = await import('/src/simulation.js');
+    const { advanceBehavior } = await import('/src/behavior.js');
+    const tank = createInitialState();
+    tank.animals = [];
+    feed(tank);
+    advanceBehavior(tank, 30);
+    advanceBehavior(tank, 15);
+    tank.paused = true;
+    return tank;
+  });
+  await page.addInitScript(({ saveKey, bottomFixture }) => {
+    if (!sessionStorage.getItem('smoke-bottom-seeded')) {
+      localStorage.setItem(saveKey, JSON.stringify(bottomFixture));
+      sessionStorage.setItem('smoke-bottom-seeded', 'true');
+    }
+  }, { saveKey, bottomFixture });
+  await page.reload();
+  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  await page.mouse.move(500, 400);
+  for (let i = 0; i < 12; i++) await page.getByRole('button', { name: '投喂', exact: true }).click();
+  const afterBurst = (await snapshot()).state;
+  function verifyBottomFeed(tank) {
+    const byId = new Map(tank.foodPellets.map(p => [p.id, p]));
+    for (const old of bottomFixture.foodPellets) {
+      assert.deepEqual(byId.get(old.id), old, 'fresh feeds leave settled food in place');
+    }
+    assert.ok(tank.foodPellets.some(p => p.y > 3.8), 'fresh food enters at the surface');
+    assert.ok(Math.abs(tank.food - .08 * 13) < 1e-8, 'all repeated feeds are accounted for');
+  }
+  verifyBottomFeed(afterBurst);
+  await page.reload();
+  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  verifyBottomFeed((await snapshot()).state);
   assert.deepEqual(errors, [], 'no JavaScript, resource or shader errors');
   const report = {
     passed: true,
-    checks: ['click a swimming fish', 'individual detailed parameters', 'visible food emitted by feed button', 'no remote hunger reduction', 'hungry fish visibly pursues food', 'contact precedes a bite', 'only eater receives nutrition', 'individuals and remaining food survive reload'],
+    checks: ['click a swimming fish', 'individual detailed parameters', 'visible food emitted by feed button', 'no remote hunger reduction', 'hungry fish visibly pursues food', 'contact precedes a bite', 'only eater receives nutrition', 'individuals and remaining food survive reload', 'settled pellets keep their IDs and positions after repeated feeds and reload'],
     pursuitFrames: seeking.length,
     hungry: { hungerBefore: 85, hungerAfter: hungryAfterBite.hunger, bites: hungryAfterBite.bites, eatenGrams: hungryAfterBite.totalEatenGrams },
     satiated: { hunger: fullAfterBite.hunger, bites: fullAfterBite.bites || 0 },

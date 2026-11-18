@@ -35,7 +35,10 @@ export const HARDSCAPE = Object.freeze({
 const MAX_ANIMALS = 80;
 export const MAX_PLANTS = 40;
 export const MAX_HARDSCAPE = 40;
-export const MAX_FOOD_PELLETS = 160;
+// Each depth range can hold a full v0.6.1 save without displacing any old feed.
+export const PELLETS_PER_LAYER = 160;
+export const MAX_FOOD_PELLETS = 3 * PELLETS_PER_LAYER;
+export const FOOD_SURFACE_Y = 3.85;
 const STEP = 1 / 12;
 let sequence = 0;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -68,25 +71,44 @@ function animal(species, serial = 1, seed = Math.random()) {
   };
 }
 
-function reconcileFood(state) {
+export function reconcileFood(state) {
   state.foodPellets = (state.foodPellets || []).filter(p => Number.isFinite(p.mass) && p.mass > 1e-10);
   state.food = state.foodPellets.reduce((sum,p) => sum + p.mass, 0);
+}
+
+export function pelletLayer(p) {
+  if (p.y >= FOOD_SURFACE_Y) return 'surface';
+  return p.y <= substrateHeight(p.x, p.z) + .041 ? 'bed' : 'sinking';
+}
+
+export function nearestPellet(pellets, x, y, z) {
+  let nearest, distance = Infinity;
+  for (const p of pellets) {
+    const squared = (p.x - x) ** 2 + (p.y - y) ** 2 + (p.z - z) ** 2;
+    if (squared < distance) { nearest = p; distance = squared; }
+  }
+  return nearest;
 }
 
 function addPellets(state, amount, seed = Math.random(), settled = false) {
   if (!(amount > 0)) return;
   state.foodPellets ||= [];
   const count = Math.min(40, Math.max(12, Math.ceil(amount / .0025)));
-  // Merge old representative particles to make room, preserving their full mass.
-  while (state.foodPellets.length + count > MAX_FOOD_PELLETS && state.foodPellets.length > 1) {
-    const a = state.foodPellets.shift(), b = state.foodPellets[0], sum = a.mass + b.mass;
-    for (const axis of ['x','y','z']) b[axis] = (a[axis] * a.mass + b[axis] * b.mass) / sum;
-    b.ageSeconds = Math.max(a.ageSeconds,b.ageSeconds); b.mass = sum;
-  }
+  const layer = settled ? 'bed' : 'surface';
+  const recipients = state.foodPellets.filter(p => pelletLayer(p) === layer);
   for (let i = 0; i < count; i++) {
     const pelletSeed = random(seed + i * 1.37);
     const x = (random(pelletSeed + 41) - .5) * 2.4, z = .4 + (random(pelletSeed + 42) - .5) * 1.1;
-    state.foodPellets.push({ id: key('pellet'), x, y: settled ? substrateHeight(x,z) + .04 : 3.88 + random(pelletSeed + 43) * .1, z, mass: amount / count, ageSeconds: settled ? 40 : 0, seed: pelletSeed });
+    const y = settled ? substrateHeight(x,z) + .04 : 3.88 + random(pelletSeed + 43) * .1;
+    if (recipients.length >= PELLETS_PER_LAYER) {
+      const nearby = nearestPellet(recipients, x, y, z);
+      nearby.mass += amount / count;
+      if (!settled) nearby.ageSeconds = 0;
+    } else {
+      const pellet = { id: key('pellet'), x, y, z, mass: amount / count, ageSeconds: settled ? 40 : 0, seed: pelletSeed };
+      recipients.push(pellet);
+      state.foodPellets.push(pellet);
+    }
   }
   reconcileFood(state);
 }
@@ -475,16 +497,21 @@ export function restoreState(raw) {
   const pelletIds = new Set();
   base.foodPellets = [];
   if (Array.isArray(data.foodPellets)) {
+    const layers = { surface: [], sinking: [], bed: [] };
     for (const p of data.foodPellets) {
       if (!p || !Number.isFinite(p.mass) || p.mass <= 0) continue;
       const id = typeof p.id === 'string' && p.id.length < 100 && !pelletIds.has(p.id) ? p.id : key('pellet');
-      pelletIds.add(id);
-      const pellet={id,x:numeric(p.x,0,-3.65,3.65),y:numeric(p.y,3.9,.15,4.05),z:numeric(p.z,.4,-1.65,1.65),mass:numeric(p.mass,0,0,100),ageSeconds:numeric(p.ageSeconds,0,0,1e8),seed:numeric(p.seed,seedFromId(id),0,1)};
-      if (base.foodPellets.length < MAX_FOOD_PELLETS) base.foodPellets.push(pellet);
-      else base.foodPellets[base.foodPellets.length-1].mass += pellet.mass;
+      const pellet={id,x:numeric(p.x,0,-3.65,3.65),y:numeric(p.y,3.9,.15,4.05),z:numeric(p.z,.4,-1.65,1.65),mass:numeric(p.mass,0,0,Number.MAX_SAFE_INTEGER),ageSeconds:numeric(p.ageSeconds,0,0,1e8),seed:numeric(p.seed,seedFromId(id),0,1)};
+      const layer = layers[pelletLayer(pellet)];
+      if (layer.length < PELLETS_PER_LAYER) {
+        layer.push(pellet);
+        base.foodPellets.push(pellet);
+        pelletIds.add(id);
+      } else {
+        nearestPellet(layer, pellet.x, pellet.y, pellet.z).mass += pellet.mass;
+      }
     }
     reconcileFood(base);
-    if(base.food>100) { for(const p of base.foodPellets)p.mass*=100/base.food;reconcileFood(base); }
   } else {
     // Legacy saves had a bulk feed amount; recover it as settled remnants.
     addPellets(base,numeric(data.food,0,0,100),.529,true);

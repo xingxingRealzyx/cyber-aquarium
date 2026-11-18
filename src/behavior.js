@@ -1,4 +1,7 @@
-import { consumePellet, SPECIES, substrateHeight } from './simulation.js';
+import {
+  consumePellet, FOOD_SURFACE_Y, nearestPellet, pelletLayer, PELLETS_PER_LAYER,
+  reconcileFood, SPECIES, substrateHeight,
+} from './simulation.js';
 
 const clamp = (v,min,max) => Math.max(min,Math.min(max,v));
 const random = seed => { const n=Math.sin(seed*127.1+311.7)*43758.5453;return n-Math.floor(n); };
@@ -39,18 +42,48 @@ function chooseFood(state,animal,reserved) {
   return chosen;
 }
 
+function sinkFood(state, dt) {
+  const crowded = state.foodPellets.length > PELLETS_PER_LAYER;
+  const bed = [];
+  let sinking = 0, merged = false;
+  if (crowded) {
+    for (const pellet of state.foodPellets) {
+      const layer = pelletLayer(pellet);
+      if (layer === 'bed') bed.push(pellet);
+      if (layer === 'sinking') sinking++;
+    }
+  }
+  for(const p of state.foodPellets) {
+    p.ageSeconds+=dt;
+    if (pelletLayer(p) === 'bed') continue;
+    p.x=clamp(p.x+Math.sin(p.ageSeconds*.7+p.seed*9)*.012*dt,-3.6,3.6);
+    p.z=clamp(p.z+Math.cos(p.ageSeconds*.5+p.seed*7)*.008*dt,-1.6,1.6);
+    const floor = substrateHeight(p.x,p.z) + .04;
+    let y = p.y - (.095+random(p.seed+8)*.03)*dt;
+    if (crowded && p.y >= FOOD_SURFACE_Y && y < FOOD_SURFACE_Y) {
+      // Let the existing food continue sinking. Excess feed floats until there is room.
+      if (sinking >= PELLETS_PER_LAYER) y = FOOD_SURFACE_Y;
+      else sinking++;
+    }
+    if (y > floor + .001) { p.y = y; continue; }
+    p.y = floor;
+    if (crowded) {
+      sinking--;
+      if (bed.length < PELLETS_PER_LAYER) bed.push(p);
+      else {
+        nearestPellet(bed, p.x, p.y, p.z).mass += p.mass;
+        p.mass = 0;
+        merged = true;
+      }
+    }
+  }
+  if (merged) reconcileFood(state);
+}
+
 function step(state,dt) {
   state.behaviorSeconds=(state.behaviorSeconds||0)+dt;
   const time=state.behaviorSeconds;
-  for(const p of state.foodPellets) {
-    p.ageSeconds+=dt;
-    const floor=substrateHeight(p.x,p.z)+.04;
-    if(p.y>floor+.001) {
-      p.x=clamp(p.x+Math.sin(p.ageSeconds*.7+p.seed*9)*.012*dt,-3.6,3.6);
-      p.z=clamp(p.z+Math.cos(p.ageSeconds*.5+p.seed*7)*.008*dt,-1.6,1.6);
-      p.y=Math.max(substrateHeight(p.x,p.z)+.04,p.y-(.095+random(p.seed+8)*.03)*dt);
-    }
-  }
+  sinkFood(state,dt);
   const reserved=new Set();
   // Hungry animals acquire food first; satiety releases any claim immediately.
   const order=[...state.animals].sort((a,b)=>b.hunger-a.hunger||a.serial-b.serial);

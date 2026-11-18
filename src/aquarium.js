@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { createWaterLight, waterSurfaceMaterial } from './water-light.js';
 import { createDesktopView } from './desktop-view.js';
-import { substrateHeight as sandHeight } from './simulation.js';
+import { MAX_FOOD_PELLETS, substrateHeight as sandHeight } from './simulation.js';
 import { createSubstrate } from './substrate.js';
 import { createTankBase } from './tank-base.js';
 import { createHardscape } from './hardscape.js';
@@ -207,10 +207,9 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   const bubbleCount=35;
   const bubbles=new THREE.InstancedMesh(new THREE.SphereGeometry(1,8,6),new THREE.MeshPhysicalMaterial({color:'#d9f7ec',roughness:.03,metalness:.1,transparent:true,opacity:.3,depthWrite:false}),bubbleCount);
   tank.add(bubbles);
-  const foodCount=256;
   const foodBits=new THREE.InstancedMesh(new THREE.IcosahedronGeometry(.044,0),material('#c99542',{
     roughness:.86,emissive:'#754315',emissiveIntensity:.2,
-  }),foodCount);
+  }),MAX_FOOD_PELLETS);
   foodBits.count=0;foodBits.frustumCulled=false;tank.add(foodBits);
   const feedRipples=[];
   for(let i=0;i<3;i++){
@@ -376,7 +375,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     }
     bubbles.instanceMatrix.needsUpdate=true;
     const pellets=(state.foodPellets||[]).filter(p=>p.mass>1e-8&&[p.x,p.y,p.z].every(Number.isFinite));
-    foodBits.count=Math.min(foodCount,pellets.length);
+    foodBits.count=pellets.length;
     for(let i=0;i<foodBits.count;i++){
       const p=pellets[i];
       dummy.position.set(p.x,p.y,p.z);
