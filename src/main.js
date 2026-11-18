@@ -596,10 +596,12 @@ try {
   window.addEventListener('resize',()=>{renderer.resize();placeDesktopAquarium();});
   let previous=performance.now(), elapsed=0, lastHitTest=0;
   function frame(now) {
-    const dt=Math.min((now-previous)/1000,1); previous=now; elapsed+=dt;
+    const dt=Math.max(0,Math.min((now-previous)/1000,1)); previous=now; elapsed+=dt;
+    // After a stalled frame, resume along the curve without skipping an entire turn.
+    const motionDt=Math.min(dt,.1);
     if(!state.paused) advanceSimulation(state,dt*state.speed/3600);
-    advanceBehavior(state,dt);
-    renderer.update(state,dt,elapsed);
+    advanceBehavior(state,motionDt);
+    renderer.update(state,dt,elapsed,motionDt);
     if (verifyUpdateFrame && document.visibilityState === 'visible' &&
         renderer.renderer.domElement.style.visibility !== 'hidden' && renderer.renderer.info.render.triangles > 0 && !gl.isContextLost()) {
       verifyUpdateFrame=false;

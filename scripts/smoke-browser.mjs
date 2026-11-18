@@ -123,6 +123,9 @@ try{
   assert.ok(Math.abs(waterline - 4.14) < 0.08, 'duck sits at the visible waterline');
   assert.ok(Math.abs(floating.find(t => t.id === ring.id).world.y - 4.14) < 0.08, 'swim ring floats at the waterline');
   assert.ok(floating.find(t => t.kind === 'diver').world.y < waterline, 'diver is submerged');
+  await page.locator('[data-add-toy="author"]').click();
+  await page.waitForFunction(() => window.aquariumDiagnostics.screenToys.some(t =>
+    t.kind === 'author' && t.visible && t.bubbles.length && t.snorkelTip.y > t.mouth.y));
   assert.equal((await page.evaluate(()=>window.aquariumDiagnostics.state.animals.length)),13);
   assert.equal((await page.evaluate(()=>window.aquariumDiagnostics.state.plants.length)),10);
   await page.locator('[data-tab="life"]').click();
@@ -168,7 +171,11 @@ try{
   assert.deepEqual(restored.toys,saved.toys);
   const reloadedToys=await page.evaluate(()=>window.aquariumDiagnostics.screenToys);
   for (const toy of pausedToys) {
-    const position = reloadedToys.find(t => t.id === toy.id).world;
+    const restoredToy = reloadedToys.find(t => t.id === toy.id);
+    const position = restoredToy.world;
+    if (toy.kind === 'author') {
+      for (const part of ['mouth','snorkelTip','bubbles']) assert.deepEqual(restoredToy[part], toy[part]);
+    }
     assert.ok(Math.hypot(position.x-toy.world.x, position.y-toy.world.y, position.z-toy.world.z) < 0.04,
       'paused floating toys return to their saved positions');
   }
@@ -180,9 +187,12 @@ try{
   await ringListButton.click();
   assert.ok((await removeRing.getAttribute('aria-label')).includes(colorName));
   await removeRing.click();
+  await page.locator('[data-show-kind="author"]').click();
+  const author = restored.toys.find(t => t.kind === 'author');
+  await page.locator(`.placed-items [data-remove-toy="${author.id}"]`).click();
   await page.waitForFunction(() => {
     const toys=window.aquariumDiagnostics.screenToys;
-    return toys.length===2 && toys.every(t => t.kind !== 'swimRing');
+    return toys.length===2 && toys.every(t => t.kind !== 'swimRing' && t.kind !== 'author');
   });
   await page.keyboard.press('Escape');
   await page.mouse.move(1,1);
@@ -195,7 +205,7 @@ try{
   await page.screenshot({path:'artifacts/aquarium-controls.png',omitBackground:true});
   await verifyUpdateBadge();
   assert.deepEqual(errors,[],'no JavaScript or shader errors');
-  const report={passed:true,checks:['transparent background','WebGL renderer','hidden controls','feeding','add fish and plants','edit individual plants and hardscape','place, drift and restore floating toys','individual inspection','water change','equipment controls','compact tabs','journal and settings navigation','update badge and release notification','clock and pause','persistence'],stats:await page.evaluate(()=>window.aquariumDiagnostics.stats),errors};
+  const report={passed:true,checks:['transparent background','WebGL renderer','hidden controls','feeding','add fish and plants','edit individual plants and hardscape','place, drift and restore floating toys','cat diver, snorkel and saved exhalation','individual inspection','water change','equipment controls','compact tabs','journal and settings navigation','update badge and release notification','clock and pause','persistence'],stats:await page.evaluate(()=>window.aquariumDiagnostics.stats),errors};
   await writeFile('artifacts/smoke-browser.json',JSON.stringify(report,null,2));
   console.log(JSON.stringify(report,null,2));
 }finally{await browser.close();}

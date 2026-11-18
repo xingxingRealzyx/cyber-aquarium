@@ -13,10 +13,13 @@ const finishes = {
 };
 const repeats = { rubber: [2, 1], pvc: [3, 1], canvas: [3, 2], copper: [2, 1] };
 const libraries = new WeakMap();
+const surfaceMaps = [['map', '-color'], ['normalMap', '-normal'], ['roughnessMap', '-rough']];
+const colorMap = [['map', '']];
+const texturedSurface = [...colorMap, ['normalMap', '-normal']];
 
 // Tint comes from each model's vertex colors. A whole tank shares the image
 // maps, including between the duck's molded skin and the diver's rubber trim.
-function attachMaps(material, tile, manager) {
+function attachMaps(material, tile, manager, channels = surfaceMaps, repeat = repeats[tile]) {
   let library = libraries.get(manager);
   if (!library) {
     library = new Map();
@@ -27,17 +30,19 @@ function attachMaps(material, tile, manager) {
     entry = { users: new Set(), loaded: {}, textures: [] };
     library.set(tile, entry);
     const loader = new TextureLoader(manager);
-    for (const [property, channel] of [['map','color'], ['normalMap','normal'], ['roughnessMap','rough']]) {
-      const texture = loader.load(`./toys/${tile}-${channel}.webp`, decoded => {
+    for (const [property, suffix] of channels) {
+      const texture = loader.load(`./toys/${tile}${suffix}.webp`, decoded => {
         entry.loaded[property] = decoded;
         for (const user of entry.users) {
           user[property] = decoded;
           user.needsUpdate = true;
         }
       });
-      texture.name = `toy ${tile} ${channel}`;
-      texture.wrapS = texture.wrapT = RepeatWrapping;
-      texture.repeat.set(...repeats[tile]);
+      texture.name = `toy ${tile}${suffix}`;
+      if (repeat) {
+        texture.wrapS = texture.wrapT = RepeatWrapping;
+        texture.repeat.set(...repeat);
+      }
       texture.anisotropy = 4;
       if (property === 'map') texture.colorSpace = SRGBColorSpace;
       entry.textures.push(texture);
@@ -55,6 +60,40 @@ function attachMaps(material, tile, manager) {
     }
   }
   material.addEventListener('dispose', release);
+}
+
+export function createAuthorFiber(fiber, manager = DefaultLoadingManager) {
+  const hair = fiber === 'hair';
+  const material = new MeshPhysicalMaterial({
+    name: `author ${fiber}`, roughness: hair ? .52 : .81,
+    sheen: hair ? .48 : .28, sheenColor: hair ? '#b9b3c4' : '#c8b797',
+    normalScale: new Vector2(.40, .40),
+  });
+  attachMaps(material, `author-${fiber}`, manager, texturedSurface, hair ? [1, 1] : [2, 2]);
+  return material;
+}
+
+// Local UVs follow hair growth on the brow, whisker pads and inner ears.
+function createAnatomicalFur(part, manager, repeat) {
+  const material = new MeshStandardMaterial({
+    name: `author ${part}`, vertexColors: true, roughness: .81,
+  });
+  attachMaps(material, `author-${part}`, manager, colorMap, repeat);
+  return material;
+}
+
+export const createAuthorFaceFur = (manager = DefaultLoadingManager) => createAnatomicalFur('brow', manager, [1, 1]);
+export const createAuthorPad = (manager = DefaultLoadingManager) => createAnatomicalFur('muzzle', manager, [1, 1]);
+export const createAuthorEar = (manager = DefaultLoadingManager) => createAnatomicalFur('ear', manager, [1, 1]);
+
+export const createAuthorCheek = (manager = DefaultLoadingManager) => createAnatomicalFur('cheek', manager);
+export const createAuthorChin = (manager = DefaultLoadingManager) => createAnatomicalFur('chin', manager);
+export const createAuthorNose = (manager = DefaultLoadingManager) => createAnatomicalFur('nose', manager);
+
+export function createAuthorIris(manager = DefaultLoadingManager) {
+  const material = new MeshStandardMaterial({ name: 'author iris', roughness: .54 });
+  attachMaps(material, 'author-iris', manager, colorMap);
+  return material;
 }
 
 export function createToyMaterial(finish, manager = DefaultLoadingManager) {

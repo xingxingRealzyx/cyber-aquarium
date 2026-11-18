@@ -16,6 +16,64 @@ function fixture(){
   return state;
 }
 
+test('fish, shrimp and snails trace bounded arcs when food is behind them near glass', () => {
+  const turnRates = { neon: 1.5, guppy: 1.5, angelfish: 1.5, zebra: 1.5, harlequin: 1.5, shrimp: 1.2, snail: .75 };
+  for (const [species, maxRate] of Object.entries(turnRates)) {
+    for (const fps of [15, 60]) {
+      const tank = createInitialState();
+      tank.animals = [];
+      const a = addAnimal(tank, species).animal;
+      const bottom = species === 'shrimp' || species === 'snail';
+      a.seed = .4;
+      a.hunger = 90;
+      a.position = { x: 3.61, y: bottom ? substrateHeight(3.61, 0) + .025 : 2.5, z: 0 };
+      a.velocity = { x: bottom ? .075 : 1.7, y: 0, z: 0 };
+      tank.food = .0015;
+      tank.foodPellets = [{
+        id: 'behind', x: 2.55, y: bottom ? substrateHeight(2.55, 0) + .04 : 2.5,
+        z: 0, mass: tank.food, seed: .4, ageSeconds: bottom ? 50 : 0,
+      }];
+      let previous = { x: 1, y: 0, z: 0 };
+      for (let frame = 0; frame < 25 * fps; frame++) {
+        const start = { ...a.position };
+        advanceBehavior(tank, 1 / fps);
+        assert.ok(a.position.x <= 3.65);
+        // Measure the path from positions, including any wall correction. Grazers follow the bed height.
+        const x = a.position.x - start.x, y = bottom ? 0 : a.position.y - start.y, z = a.position.z - start.z;
+        const length = Math.hypot(x, y, z);
+        assert.ok(length > 1e-9, `${species} stalled mid-turn`);
+        const cosine = (x * previous.x + y * previous.y + z * previous.z) / length;
+        const angle = Math.acos(Math.max(-1, Math.min(1, cosine)));
+        // Two substeps per 15 Hz frame produce a chord weighted by their different speeds.
+        const chordTolerance = fps < 30 ? 1.05 : 1;
+        assert.ok(angle <= maxRate / fps * chordTolerance + 1e-7, `${species} turned ${angle} radians in one frame at ${fps} fps`);
+        previous = { x: x / length, y: y / length, z: z / length };
+      }
+      assert.ok(a.bites > 0, `${species} must still reach the food after turning`);
+    }
+  }
+});
+
+test('a saved animal resting against a corner can turn and resume feeding', () => {
+  for (const species of ['neon', 'snail']) {
+    const tank = createInitialState();
+    tank.animals = [];
+    const a = addAnimal(tank, species).animal;
+    const fish = species === 'neon';
+    a.position = { x: 3.65, y: fish ? .67 : substrateHeight(3.65, 1.65) + .025, z: 1.65 };
+    a.velocity = { x: 0, y: 0, z: 0 };
+    a.hunger = 90;
+    tank.food = .001;
+    tank.foodPellets = [{
+      id: 'corner', x: 2.7, y: fish ? 2.7 : substrateHeight(2.7, 1.3) + .04,
+      z: 1.3, mass: tank.food, seed: .3, ageSeconds: fish ? 0 : 50,
+    }];
+    const restored = restoreState(JSON.stringify(tank));
+    run(restored, 16);
+    assert.ok(restored.animals[0].bites > 0);
+  }
+});
+
 test('both angelfish parents guard the eggs but can leave to feed or breathe', () => {
   const tank = createInitialState();
   tank.animals = [];
@@ -106,6 +164,19 @@ test('hungry fish get first access to a contested pellet and satiety releases ta
   assert.equal(hungry.targetFoodId,'one');assert.equal(lessHungry.targetFoodId,null);
   hungry.hunger=2;advanceBehavior(state,.05);
   assert.equal(hungry.targetFoodId,null);assert.equal(lessHungry.targetFoodId,'one');
+});
+
+test('saving on the frame that finishes a pellet preserves the feeding state', () => {
+  const state = fixture();
+  const [fish] = state.animals;
+  feed(state);
+  const pellet = state.foodPellets[0];
+  fish.position = { x: pellet.x, y: pellet.y, z: pellet.z };
+  fish.targetFoodId = pellet.id;
+  pellet.mass = .0001;
+  assert.equal(consumePellet(state, fish.id, pellet.id).grams, .0001);
+  assert.equal(fish.targetFoodId, null);
+  assert.deepEqual(restoreState(JSON.stringify(state)).animals[0], fish);
 });
 
 test('pellets settle for bottom dwellers, survive pause, and decay into water pollution',()=>{

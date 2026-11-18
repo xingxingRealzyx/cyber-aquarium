@@ -8,6 +8,49 @@ const random = seed => { const n=Math.sin(seed*127.1+311.7)*43758.5453;return n-
 const distance = (a,b) => Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
 const FISH_MIN_Y=.67;
 
+// Radians per real second. Benthic grazers pivot more slowly than swimming fish.
+export function animalTurnRate(species) {
+  if (species === 'snail') return .75;
+  if (species === 'shrimp') return 1.2;
+  return 1.5;
+}
+
+function steer(animal, tx, ty, tz, dt, response) {
+  const v = animal.velocity;
+  const horizontal = Math.hypot(v.x, v.z);
+  const speed = Math.hypot(horizontal, v.y);
+  const yaw = Math.atan2(v.z, v.x);
+  const pitch = Math.atan2(v.y, horizontal);
+  const targetHorizontal = Math.hypot(tx, tz);
+  const targetSpeed = Math.hypot(targetHorizontal, ty);
+  const targetYaw = targetHorizontal > targetSpeed * .01 ? Math.atan2(tz, tx) : yaw;
+  const targetPitch = targetSpeed > 0 ? Math.atan2(ty, targetHorizontal) : pitch;
+  const yawDelta = Math.atan2(Math.sin(targetYaw - yaw), Math.cos(targetYaw - yaw));
+  const pitchDelta = targetPitch - pitch;
+  const turn = Math.hypot(yawDelta, pitchDelta);
+  const fraction = turn > 0 ? Math.min(1, animalTurnRate(animal.species) * dt / turn) : 0;
+  const nextYaw = yaw + yawDelta * fraction;
+  const nextPitch = pitch + pitchDelta * fraction;
+
+  // Slow down through tight turns so we can capture a drifting pellet without orbiting it.
+  const alignment = Math.cos(nextPitch) * Math.cos(targetPitch) * Math.cos(targetYaw - nextYaw)
+    + Math.sin(nextPitch) * Math.sin(targetPitch);
+  const cornerSpeed = targetSpeed * (.12 + .88 * Math.max(0, alignment));
+  const nextSpeed = speed + (cornerSpeed - speed) * (1 - Math.exp(-dt * response));
+  const nextHorizontal = nextSpeed * Math.cos(nextPitch);
+  v.x = nextHorizontal * Math.cos(nextYaw);
+  v.z = nextHorizontal * Math.sin(nextYaw);
+  v.y = nextSpeed * Math.sin(nextPitch);
+}
+
+// Ease the entire stride as it approaches glass, keeping the actual path tangent
+// to the animal's heading. Clipping one component makes it slide sideways.
+function wallStride(position, velocity, min, max) {
+  if (velocity === 0) return 1;
+  const space = velocity > 0 ? max - position : position - min;
+  return clamp(3 * space / Math.abs(velocity), 0, 1);
+}
+
 function roamTarget(animal,time,broods) {
   const seed=animal.seed;
   if(SPECIES[animal.species].type!=='fish') {
@@ -117,7 +160,7 @@ function step(state,dt) {
     }
     const speed = desiredSpeed * health * (.9 + a.metabolism * .1);
     // Arrive without orbiting the target; feeding is still guarded by contact.
-    const arrive=food?clamp(d/.42,.24,1):clamp(d/.6,.3,1);
+    const arrive = Math.min(1, d / (food ? .42 : .6));
     let tx=dx/d*speed*arrive,ty=dy/d*speed*arrive,tz=dz/d*speed*arrive;
     if(fish) {
       // Mild individual separation, weakened at the mouth for reliable bites.
@@ -136,13 +179,16 @@ function step(state,dt) {
         ty+=Math.max(0,1.35-pos.y)*.7;
       }
     }
-    const blend=1-Math.exp(-dt*(food?5:2.2));
-    vel.x+=(tx-vel.x)*blend;vel.y+=(ty-vel.y)*blend;vel.z+=(tz-vel.z)*blend;
-    pos.x=clamp(pos.x+vel.x*dt,-3.65,3.65);
-    pos.z=clamp(pos.z+vel.z*dt,-1.65,1.65);
+    steer(a, tx, fish ? ty : 0, tz, dt, food ? 5 : 2.2);
+    let stride = Math.min(wallStride(pos.x, vel.x, -3.65, 3.65), wallStride(pos.z, vel.z, -1.65, 1.65));
+    if (fish) {
+      const bottom = Math.max(FISH_MIN_Y, substrateHeight(pos.x,pos.z) + .17);
+      stride = Math.min(stride, wallStride(pos.y, vel.y, bottom, 3.96));
+    }
+    pos.x += vel.x * dt * stride;
+    pos.z += vel.z * dt * stride;
     const floor=substrateHeight(pos.x,pos.z)+(fish?.17:.025);
-    pos.y=fish?clamp(pos.y+vel.y*dt,Math.max(FISH_MIN_Y,floor),3.96):floor;
-    if(!fish)vel.y=0;
+    pos.y=fish?clamp(pos.y+vel.y*dt*stride,Math.max(FISH_MIN_Y,floor),3.96):floor;
     if(food)consumePellet(state,a.id,food.id);
   }
 }

@@ -12,6 +12,9 @@ import { createAquaticPlants } from './aquatic-plants.js';
 import { createBroodDisplay } from './brood-model.js';
 import { createToyModel } from './toy-model.js';
 import { poseToy } from './toy-motion.js';
+import { createAuthorSwimmer, animateAuthorSwimmer } from './author-swimmer.js';
+import { createAuthorDisplay } from './author-motion.js';
+import { animalTurnRate } from './behavior.js';
 
 // All geometry is local. The framebuffer remains transparent outside the tank.
 const WIDTH = 8, HEIGHT = 4.4, DEPTH = 4, WATER_LEVEL = 4.14;
@@ -37,6 +40,7 @@ function tube(points, radius, mat, parent, segments = 24) {
 function disposeObject(object) {
   object.traverse((item) => {
     item.userData.disposeTextures?.();
+    if (item.isInstancedMesh) item.dispose();
     item.geometry?.dispose();
     const materials = Array.isArray(item.material) ? item.material : [item.material];
     materials.forEach((m) => m?.dispose());
@@ -280,9 +284,10 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     const rect=renderer.domElement.getBoundingClientRect();
     camera.updateMatrixWorld();
     return [...toys].map(([id,model])=>{
-      model.getWorldPosition(projected);
+      const author=model.userData.author;
+      (author?.swimmer ?? model).getWorldPosition(projected);
       const {x,y,z}=projected;
-      return {id,kind:model.userData.toyKind,world:{x,y,z},...screenPoint(projected,rect)};
+      return {id,kind:model.userData.toyKind,world:{x,y,z},...screenPoint(projected,rect),...author?.diagnostics()};
     });
   }
   function pickAnimal(clientX,clientY,cycleFrom=null){
@@ -340,7 +345,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   }
   const resizeObserver=new ResizeObserver(resize);resizeObserver.observe(container);resize();
   let lastLight=true;
-  function update(state,deltaSeconds,elapsedSeconds){
+  function update(state,deltaSeconds,elapsedSeconds,motionDt=deltaSeconds){
     const t=Number.isFinite(elapsedSeconds)?elapsedSeconds:time.value+Math.max(0,deltaSeconds);
     time.value=t;
     waterClock.value=state.currentSeconds ?? t;
@@ -368,11 +373,21 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     for(const toy of placedToys){
       let model=toys.get(toy.id);
       if(!model){
-        model=createToyModel(toy.kind, toy.color, sceneryLoader);
+        if (toy.kind === 'author') {
+          const swimmer = createAuthorSwimmer(sceneryLoader);
+          model = createAuthorDisplay(swimmer, animateAuthorSwimmer, toy.slot, WATER_LEVEL, hardscape.driftFloor);
+        } else {
+          model=createToyModel(toy.kind, toy.color, sceneryLoader);
+        }
         model.userData.toyKind=toy.kind;
         tank.add(model);toys.set(toy.id,model);
       }
-      poseToy(model,toy,waterClock.value,WATER_LEVEL,hardscape.driftFloor);
+      if (model.userData.author) {
+        const age = Math.max(0, (state.behaviorSeconds ?? 0) - (toy.placedAtSeconds ?? 0));
+        model.userData.author.update(age, hardscape.revision);
+      } else {
+        poseToy(model,toy,waterClock.value,WATER_LEVEL,hardscape.driftFloor);
+      }
     }
     const signature=(state.plants||[]).map(p=>`${p.id}:${p.species}:${p.slot}:${Math.round((p.biomass??1)*4)}`).join('|');
     if(signature!==plantsSignature){plantsSignature=signature;rebuildPlants(state.plants||[]);}
@@ -420,9 +435,9 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
         model.quaternion.copy(targetQuaternion);
         model.userData.orientationInitialized=true;
       }else if (!state.paused) {
-        model.quaternion.slerp(targetQuaternion,1-Math.exp(-Math.max(0,deltaSeconds)*9));
+        model.quaternion.rotateTowards(targetQuaternion,animalTurnRate(animal.species)*Math.max(0,motionDt));
       }
-      if (fish) animateFish(model,animal,state.paused ? 0 : deltaSeconds,swimSpeed,decay);
+      if (fish) animateFish(model,animal,state.paused ? 0 : motionDt,swimSpeed,decay);
     }
     for(const [id,model] of animals)if(!currentIds.has(id)){fauna.remove(model);disposeObject(model);animals.delete(id);}
     broodDisplay.update(state.broods ?? [], animals, plantsGroup?.userData.leafSites, t);

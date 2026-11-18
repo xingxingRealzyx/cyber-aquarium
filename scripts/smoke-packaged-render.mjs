@@ -94,6 +94,17 @@ async function verifyFrame(application, backend) {
   assert.equal(result.webglError, 0);
   assert.ok(result.stats.drawCalls > 0 && result.stats.triangles > 0);
   assert.ok(result.opaquePixels > 5 && result.uniqueOpaqueColors > 5 && result.clearPixels > 0, 'the GPU frame contains scenery and clear desktop pixels');
+  // Placing the diver also exercises the articulated meshes, skinning shaders
+  // and the local texture URLs on the actual WebGL backend.
+  await page.locator('#aquarium canvas').dispatchEvent('contextmenu', {button:2});
+  await page.locator('[data-tab="scenery"]').dispatchEvent('click');
+  await page.locator('[data-add-toy="author"]').dispatchEvent('click');
+  await page.waitForFunction(() => window.aquariumDiagnostics.screenToys.some(toy =>
+    toy.kind === 'author' && toy.visible && toy.snorkelTip.y > toy.mouth.y && toy.bubbles.length > 0),
+  null, {timeout:90000});
+  const afterPlacement = await page.evaluate(() =>
+    document.querySelector('#aquarium canvas').getContext('webgl2').getError());
+  assert.equal(afterPlacement, 0, 'the swimming model renders without WebGL errors');
   assert.deepEqual(errors, []);
   if (requireHardware) {
     assert.equal(graphics.accelerationEnabled, true);

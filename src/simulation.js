@@ -41,6 +41,7 @@ export const HARDSCAPE = Object.freeze({
 export const TOYS = Object.freeze({
   duck: { name: '小黄鸭', surface: true },
   diver: { name: '潜水员' },
+  author: { name: '作者本人' },
   swimRing: {
     name: '小游泳圈',
     surface: true,
@@ -157,7 +158,14 @@ function growAnimal(a, spec, dt) {
 }
 
 export function reconcileFood(state) {
-  state.foodPellets = (state.foodPellets || []).filter(p => Number.isFinite(p.mass) && p.mass > 1e-10);
+  const previous = state.foodPellets || [];
+  state.foodPellets = previous.filter(p => Number.isFinite(p.mass) && p.mass > 1e-10);
+  if (state.foodPellets.length < previous.length) {
+    const remaining = new Set(state.foodPellets.map(p => p.id));
+    for (const animal of state.animals) {
+      if (animal.targetFoodId && !remaining.has(animal.targetFoodId)) animal.targetFoodId = null;
+    }
+  }
   state.food = state.foodPellets.reduce((sum,p) => sum + p.mass, 0);
 }
 
@@ -352,6 +360,7 @@ function addDecoration(state, collection, kind) {
   if (items.length >= limit) return { ok: false, message: `最多放置 ${limit} 件${label}。` };
   const used = new Set(items.filter(item => item.kind === kind).map(item => item.slot));
   const added = { id: key(idPrefix), kind, slot: availableSlot(used, null, limit) };
+  if (kind === 'author') added.placedAtSeconds = state.behaviorSeconds;
   if (catalog[kind].surface) {
     const surface = items.filter(item => catalog[item.kind].surface);
     reserveSurfaceSlot(added, new Set(surface.map(item => item.surfaceSlot ?? item.slot)));
@@ -748,6 +757,9 @@ export function restoreState(raw) {
       const id = validId ? item.id : key(idPrefix);
       usedIds.add(id);
       const restored = { id, kind: item.kind, slot };
+      if (item.kind === 'author') {
+        restored.placedAtSeconds = numeric(item.placedAtSeconds, 0, 0, base.behaviorSeconds);
+      }
       if (catalog[item.kind].surface) reserveSurfaceSlot(restored, usedSurfaceSlots, item.surfaceSlot);
       const palette = catalog[item.kind].colors;
       if (palette) {
@@ -770,7 +782,7 @@ export function restoreState(raw) {
   if (Array.isArray(data.foodPellets)) {
     const bed = [], falling = [];
     for (const p of data.foodPellets) {
-      if (!p || !Number.isFinite(p.mass) || p.mass <= 0) continue;
+      if (!p || !Number.isFinite(p.mass) || p.mass <= 1e-10) continue;
       const id = typeof p.id === 'string' && p.id.length < 100 && !pelletIds.has(p.id) ? p.id : key('pellet');
       const pellet={id,x:numeric(p.x,0,-3.65,3.65),y:numeric(p.y,3.9,.15,4.05),z:numeric(p.z,.4,-1.65,1.65),mass:numeric(p.mass,0,0,Number.MAX_SAFE_INTEGER),ageSeconds:numeric(p.ageSeconds,0,0,1e8),seed:numeric(p.seed,seedFromId(id),0,1)};
       const settled = isSettledPellet(pellet);

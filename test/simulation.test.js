@@ -100,6 +100,20 @@ test('swim rings get individual colors on placement and keep them after a reload
   assert.deepEqual(restoreState(JSON.stringify(state)).toys, [first, second]);
 });
 
+test('author swimmers keep individual placement times across save, reopen and removal', () => {
+  const state = createInitialState();
+  state.behaviorSeconds = 14.25;
+  const first = addToy(state, 'author').item;
+  state.behaviorSeconds += 50;
+  const second = addToy(state, 'author').item;
+  assert.equal(first.placedAtSeconds, 14.25);
+  assert.equal(second.placedAtSeconds, 64.25);
+  const reopened = restoreState(JSON.stringify(state));
+  assert.deepEqual(reopened.toys, [first, second]);
+  assert.equal(removeToy(reopened, first.id).ok, true);
+  assert.deepEqual(reopened.toys, [second]);
+});
+
 test('mixed ducks and rings keep distinct water-surface slots when others are removed', () => {
   const state = createInitialState();
   const surfaceSlot = item => item.surfaceSlot ?? item.slot;

@@ -148,11 +148,13 @@ export function createHardscape(manager) {
     return { mesh, kind, geometryFor, signature: '', bounds: [] };
   });
 
+  let revision = 0;
   function update(items) {
     for (const batch of batches) {
       const slots = items.filter(item => item.kind === batch.kind).map(item => item.slot);
       const signature = slots.join(',');
       if (signature === batch.signature) continue;
+      revision++;
       const pieces = slots.map(batch.geometryFor);
       batch.bounds = pieces.map(piece => {
         piece.computeBoundingBox();
@@ -181,5 +183,5 @@ export function createHardscape(manager) {
     }
     return floor;
   }
-  return { group, update, driftFloor };
+  return { group, update, driftFloor, get revision() { return revision; } };
 }

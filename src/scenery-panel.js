@@ -1,11 +1,14 @@
 import { PLANTS, HARDSCAPE, TOYS, MAX_PLANTS, MAX_HARDSCAPE, MAX_TOYS } from './simulation.js';
 
+const { author, ...floatingToys } = TOYS;
+
 export function sceneryPanel(state, expandedKind, escape) {
-  function section(title, items, catalog, category, limit) {
+  function section(title, items, catalog, category, limit, unit = category === 'plant' ? '丛' : '件') {
     const plant = category === 'plant';
-    const unit = plant ? '丛' : '件';
+    let count = 0;
     const rows = Object.entries(catalog).map(([kind, entry]) => {
       const placed = items.filter(item => (plant ? item.species : item.kind) === kind);
+      count += placed.length;
       const expanded = expandedKind === kind;
       const last = placed.at(-1);
       const details = expanded && placed.length ? `<ul class="placed-items">
@@ -23,11 +26,12 @@ export function sceneryPanel(state, expandedKind, escape) {
           <button class="quantity" data-add-${category}="${kind}" aria-label="添加一${unit}${entry.name}" ${items.length >= limit ? 'disabled' : ''}>＋</button>
         </div>${details}</div>`;
     }).join('');
-    return `<div class="section-label"><span>${title}</span><span>${items.length} ${unit}</span></div><div class="scenery-list">${rows}</div>`;
+    return `<div class="section-label"><span>${title}</span><span>${count} ${unit}</span></div><div class="scenery-list">${rows}</div>`;
   }
   return section('水草', state.plants, PLANTS, 'plant', MAX_PLANTS)
     + section('石与沉木', state.hardscape, HARDSCAPE, 'hardscape', MAX_HARDSCAPE)
     + '<p class="micro-note">点品种名称可按编号移出。水草在光照下吸收硝酸盐并产氧。</p>'
-    + section('漂浮玩具', state.toys, TOYS, 'toy', MAX_TOYS)
-    + '<p class="micro-note">小黄鸭和小游泳圈随水面起伏。游泳圈放入时随机选色。潜水员具有中性浮力，随水流上下漂移。</p>';
+    + section('漂浮玩具', state.toys, floatingToys, 'toy', MAX_TOYS)
+    + '<p class="micro-note">小黄鸭和小游泳圈随水面起伏。游泳圈放入时随机选色。潜水员具有中性浮力，随水流上下漂移。</p>'
+    + section('恶搞造景', state.toys, { author }, 'toy', MAX_TOYS, '位');
 }

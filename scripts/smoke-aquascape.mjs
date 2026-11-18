@@ -53,18 +53,22 @@ try {
     const {aquarium, state, sim} = window.inspectScene;
     window.renderScene('default', 'low');
     const memory = {...aquarium.renderer.info.memory};
-    for (const kind of ['duck', 'diver', 'swimRing']) sim.addToy(state, kind);
+    for (const kind of ['duck', 'diver', 'swimRing', 'author']) sim.addToy(state, kind);
     window.renderScene('default', 'low');
     return memory;
   });
   const toyMaps = ['pvc', 'rubber', 'canvas', 'copper'].flatMap(finish =>
     ['color', 'normal', 'rough'].map(channel => `/toys/${finish}-${channel}.webp`));
+  for (const part of ['iris', 'brow', 'ear', 'cheek', 'chin', 'muzzle', 'nose', 'fur', 'hair', 'fur-normal', 'hair-normal']) {
+    toyMaps.push(`/toys/author-${part}.webp`);
+  }
   await page.waitForFunction(({beforeToys, toyMaps}) => {
     const loaded = new Set(performance.getEntriesByType('resource')
       .filter(entry => entry.initiatorType === 'img').map(entry => new URL(entry.name).pathname));
     if (!toyMaps.every(file => loaded.has(file))) return false;
     window.renderScene('default', 'low');
-    return window.inspectScene.aquarium.renderer.info.memory.textures >= beforeToys.textures + toyMaps.length;
+    return window.inspectScene.aquarium.getToyScreenPositions().some(t => t.kind === 'author' && t.snorkelTip.y > t.mouth.y) &&
+      window.inspectScene.aquarium.renderer.info.memory.textures >= beforeToys.textures + toyMaps.length;
   }, {beforeToys, toyMaps});
   const afterToys = await page.evaluate(() => {
     const {aquarium, state, sim} = window.inspectScene;
@@ -72,7 +76,7 @@ try {
     window.renderScene('default', 'low');
     return {...aquarium.renderer.info.memory};
   });
-  assert.deepEqual(afterToys, beforeToys, 'removing all three toys releases their textures and meshes');
+  assert.deepEqual(afterToys, beforeToys, 'removing the toys and swimmer releases their textures and meshes');
   const metrics=await page.evaluate(async () => {
     const {aquarium,state,sim}=window.inspectScene;
     const renderAndWait=async () => {
