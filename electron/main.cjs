@@ -274,11 +274,12 @@ function createWindow() {
 
 function bindIPC() {
   const trusted = event => aquariumWindow && event.sender === aquariumWindow.webContents && event.senderFrame === aquariumWindow.webContents.mainFrame;
+  const isPackaged = app.isPackaged && !process.env.ELECTRON_RENDERER_URL;
   const updater = createUpdater({
     currentVersion: app.getVersion(),
     platform: process.platform,
     arch: process.arch,
-    isPackaged: app.isPackaged && !process.env.ELECTRON_RENDERER_URL,
+    isPackaged,
     request: (url, signal) => githubRequest(net, url, signal),
     stagingRoot: path.join(userDataPath, 'update-downloads'),
     executablePath: process.execPath,
@@ -289,6 +290,12 @@ function bindIPC() {
     },
     quit: () => app.quit(),
   });
+  if (isPackaged) {
+    void updater.checkInBackground();
+    const timer = setInterval(updater.checkInBackground, 6 * 60 * 60 * 1000);
+    timer.unref();
+    app.once('will-quit', () => clearInterval(timer));
+  }
   for (const [channel, action] of [
     ['aquarium:get-update-state', updater.getState],
     ['aquarium:check-update', updater.check],

@@ -125,6 +125,7 @@ function createUpdater({ currentVersion, platform, arch, isPackaged, request, st
   let state = { phase: 'idle', currentVersion, latestVersion: null, progress: 0, message: '' };
   let candidate = null;
   let inFlight;
+  let releaseLookup;
   function setState(phase, changes) {
     state = { ...state, phase, ...changes };
     onState(state);
@@ -139,18 +140,38 @@ function createUpdater({ currentVersion, platform, arch, isPackaged, request, st
     }).finally(() => { inFlight = null; });
     return inFlight;
   }
+  function latestRelease() {
+    // An explicit check during a background lookup shares the same request.
+    if (!releaseLookup) {
+      releaseLookup = readRelease(request)
+        .then(release => findUpdate(release, currentVersion, platform, arch))
+        .finally(() => { releaseLookup = null; });
+    }
+    return releaseLookup;
+  }
+  function applyRelease({ version, asset }) {
+    candidate = asset ? { version, asset } : null;
+    return setState(asset ? 'available' : 'current', {
+      latestVersion: version, progress: 0,
+      message: asset ? `发现新版本 v${version}` : '当前已是最新版本',
+    });
+  }
+  async function checkInBackground() {
+    if (inFlight || state.phase === 'installing') return state;
+    const previous = state;
+    let release;
+    try { release = await latestRelease(); }
+    catch { return state; }
+    // A user action or an installer rollback takes priority over this lookup.
+    if (state !== previous || inFlight || (state.phase === 'error' && !release.asset)) return state;
+    return applyRelease(release);
+  }
   function check() {
     if (state.phase === 'installing') return Promise.resolve(state);
     return run(async () => {
       candidate = null;
       setState('checking', { latestVersion: null, progress: 0, message: '正在检查更新…' });
-      const release = await readRelease(request);
-      const { version, asset } = findUpdate(release, currentVersion, platform, arch);
-      if (asset) candidate = { version, asset };
-      return setState(asset ? 'available' : 'current', {
-        latestVersion: version,
-        message: asset ? `发现新版本 v${version}` : '当前已是最新版本',
-      });
+      return applyRelease(await latestRelease());
     });
   }
   function install() {
@@ -185,7 +206,7 @@ function createUpdater({ currentVersion, platform, arch, isPackaged, request, st
       return state;
     });
   }
-  return { getState: () => state, check, install,
+  return { getState: () => state, check, checkInBackground, install,
     reportRollback: message => { candidate = null; return setState('error', { message, progress: 0 }); },
   };
 }

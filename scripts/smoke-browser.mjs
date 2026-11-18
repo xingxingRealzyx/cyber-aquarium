@@ -11,6 +11,56 @@ const page=await browser.newPage({viewport:{width:1040,height:760},deviceScaleFa
 const errors=[];
 page.on('pageerror',e=>errors.push(e.message));
 page.on('console',m=>{if(m.type()==='error'&&!m.text().includes('favicon'))errors.push(m.text());});
+
+async function verifyUpdateBadge() {
+  // Exercise the renderer with the same update events as Electron, without using GitHub or the installer.
+  await page.addInitScript(() => {
+    window.installCalls = 0;
+    window.aquariumDesktop = {
+      getInfo: async () => ({}), onState() {}, setPointerInside() {},
+      getUpdateState: async () => ({phase: 'idle', currentVersion: '1.0.0'}),
+      onUpdateState: handler => window.addEventListener('test-update', e => handler(e.detail)),
+      checkForUpdate: async () => ({phase: 'current', currentVersion: '1.0.0'}),
+      installUpdate: async () => {
+        window.installCalls++;
+        return {phase: 'downloading', progress: 1};
+      },
+    };
+  });
+  await page.reload();
+  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  await page.mouse.move(520, 380);
+  const settings = page.locator('#dock [data-action="settings"]');
+  const dot = settings.locator('#update-dot');
+  const emit = (phase, latestVersion) => page.evaluate(detail => {
+    window.dispatchEvent(new CustomEvent('test-update', {detail}));
+  }, {phase, currentVersion: '1.0.0', latestVersion});
+  assert.equal(await dot.count(), 1);
+  assert.equal(await dot.isVisible(), false);
+  await emit('available', '1.1.0');
+  assert.equal(await page.locator('#panel').isVisible(), false);
+  assert.equal(await dot.isVisible(), true);
+  assert.match(await settings.getAttribute('aria-description'), /1\.1\.0/);
+  assert.ok(await dot.evaluate(el => getComputedStyle(el).backgroundColor ===
+    getComputedStyle(document.querySelector('#infection-dot')).backgroundColor));
+  await settings.click();
+  const controls = page.locator('.update-control');
+  assert.match(await controls.getByRole('status').innerText(), /发现新版本 v1\.1\.0/);
+  assert.equal(await controls.locator('[data-action="install-update"]').isEnabled(), true);
+  const content = page.locator('#panel-content');
+  await page.setViewportSize({width: 720, height: 520});
+  await content.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  assert.ok(await content.evaluate(el => el.scrollTop > 0));
+  await settings.click();
+  assert.equal(await content.evaluate(el => el.scrollTop), 0);
+  assert.equal(await page.evaluate(() => window.installCalls), 0);
+  for (const phase of ['current', 'error']) {
+    await emit(phase);
+    assert.equal(await dot.isVisible(), false);
+    assert.equal(await controls.locator('[data-action="install-update"]').count(), 0);
+  }
+}
+
 try{
   await page.goto(process.env.AQUARIUM_URL||'http://127.0.0.1:5178/');
   await page.waitForFunction(()=>window.aquariumDiagnostics?.stats.fps>0);
@@ -56,6 +106,8 @@ try{
   await page.getByRole('button',{name:'鱼缸设置',exact:true}).click();
   const activeTab = page.locator('.tabs .active');
   assert.equal(await activeTab.getAttribute('data-tab'), 'settings');
+  assert.equal(await page.locator('#update-dot').isVisible(), false);
+  assert.equal(await page.locator('.update-control').count(), 0);
   await page.setViewportSize({width:720,height:520});
   const tabs = page.locator('.tabs');
   assert.ok(await tabs.evaluate(nav => nav.scrollWidth <= nav.clientWidth), 'all tabs fit in compact mode');
@@ -90,8 +142,9 @@ try{
   await page.mouse.move(500,400);
   await page.getByRole('button',{name:'查看水质',exact:true}).click();
   await page.screenshot({path:'artifacts/aquarium-controls.png',omitBackground:true});
+  await verifyUpdateBadge();
   assert.deepEqual(errors,[],'no JavaScript or shader errors');
-  const report={passed:true,checks:['transparent background','WebGL renderer','hidden controls','feeding','add fish and plants','edit individual plants and hardscape','individual inspection','water change','equipment controls','compact tabs','journal and settings navigation','clock and pause','persistence'],stats:await page.evaluate(()=>window.aquariumDiagnostics.stats),errors};
+  const report={passed:true,checks:['transparent background','WebGL renderer','hidden controls','feeding','add fish and plants','edit individual plants and hardscape','individual inspection','water change','equipment controls','compact tabs','journal and settings navigation','update badge and release notification','clock and pause','persistence'],stats:await page.evaluate(()=>window.aquariumDiagnostics.stats),errors};
   await writeFile('artifacts/smoke-browser.json',JSON.stringify(report,null,2));
   console.log(JSON.stringify(report,null,2));
 }finally{await browser.close();}

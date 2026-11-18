@@ -93,7 +93,7 @@ app.innerHTML = `
     <button data-action="water" aria-label="查看水质" title="水质与设备">${icon('drop')}<span>水质</span><em id="health-dot"></em></button>
     <button data-action="life" aria-label="添加生物" title="管理鱼、水生物和造景">${icon('fish')}<span>生物</span><em class="warning" id="infection-dot" hidden></em></button><i></i>
     <button data-action="rotate" aria-label="自动旋转" title="自动环绕">${icon('rotate')}</button>
-    <button data-action="settings" aria-label="鱼缸设置" title="鱼缸设置">${icon('sliders')}</button>
+    <button data-action="settings" aria-label="鱼缸设置" title="鱼缸设置">${icon('sliders')}<em class="warning" id="update-dot" aria-hidden="true" hidden></em></button>
   </div><div class="dock-caption">点击鱼看档案 · 拖动旋转 · 滚轮缩放</div></div>
   <div id="error" class="error-card interactive" hidden></div>
 `;
@@ -239,6 +239,17 @@ function updateControls() {
 function applyUpdateState(value) {
   if (!value) return;
   updateState = value;
+  const dot = $('#update-dot');
+  dot.hidden = value.phase !== 'available';
+  const settingsButton = dot.parentElement;
+  if (dot.hidden) {
+    settingsButton.title = '鱼缸设置';
+    settingsButton.removeAttribute('aria-description');
+  } else {
+    const notice = `发现新版本 v${value.latestVersion}`;
+    settingsButton.title = `鱼缸设置 · ${notice}`;
+    settingsButton.setAttribute('aria-description', notice);
+  }
   if (value.phase === 'installing') persist();
   if (panelOpen && activeTab === 'settings') updatePanel();
 }
@@ -309,7 +320,7 @@ function openPanel(tab=activeTab) {
     else button.removeAttribute('aria-current');
   }
   updatePanel();
-  if(changed) $('#panel-content').scrollTop=0;
+  if(changed || (tab === 'settings' && updateState.phase === 'available')) $('#panel-content').scrollTop=0;
   updatePointerPosition(lastPointer);
 }
 function closePanel() {
