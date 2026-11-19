@@ -62,10 +62,10 @@ export function createFeedingSegments(axes, bodyShape, fit) {
     profiles.set(k,shape);
     return shape;
   }
-  function clear(x,y,z,dx,dy,dz,shape,pad,benthic,padY=pad) {
+  function clear(x,y,z,dx,dy,dz,shape,pad,benthic,padY=pad,top=4.135) {
     if (Math.min(x,x+dx)+shape.lo[0]-pad < -3.98 || Math.max(x,x+dx)+shape.hi[0]+pad > 3.98 ||
         Math.min(z,z+dz)+shape.lo[2]-pad < -1.98 || Math.max(z,z+dz)+shape.hi[2]+pad > 1.98) return false;
-    if (!benthic && (Math.max(y,y+dy)+shape.hi[1]+padY>4.135 ||
+    if (!benthic && (Math.max(y,y+dy)+shape.hi[1]+padY>top ||
         y+shape.lo[1]-padY<substrateHeight(x,z)+.007 ||
         y+dy+shape.lo[1]-padY<substrateHeight(x+dx,z+dz)+.007)) return false;
     for (const broad of nearby) {
@@ -78,11 +78,19 @@ export function createFeedingSegments(axes, bodyShape, fit) {
     }
     return true;
   }
-  return function canPass(a,from,to,incoming,solids,revision) {
+  return function canPass(a,from,to,incoming,solids,revision,descend=false) {
     const benthic=SPECIES[a.species].type==='invertebrate';
     const dx=to.x-from.x, dy=to.y-from.y, dz=to.z-from.z, flat=Math.hypot(dx,dz);
     const velocity=incoming ?? a.velocity ?? {x:1,y:0,z:0};
     const yaw0=Math.atan2(velocity.z,velocity.x), pitch0=benthic?0:Math.max(-.85,Math.min(.85,Math.atan2(velocity.y,Math.hypot(velocity.x,velocity.z))));
+    if (descend) {
+      if (benthic || flat>1e-8 || dy>=0) return false;
+      // Scull beneath the surface with the current body attitude. A grown
+      // fin or a legacy pose above the waterline can only move back inside.
+      const shape=profile(a,yaw0,pitch0);
+      select(solids,revision,from,to,shape.radius+.015);
+      return clear(from.x,from.y,from.z,0,dy,0,shape,0,false,0,Math.max(4.135,from.y+shape.hi[1]));
+    }
     const yaw=flat>1e-8?Math.atan2(dz,dx):yaw0;
     const pitch=benthic?0:Math.max(-.85,Math.min(.85,Math.atan2(dy,flat)));
     const shape=profile(a,yaw,pitch);

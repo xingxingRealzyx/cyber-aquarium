@@ -108,3 +108,33 @@ test('a hungry shrimp checks the next grains when the ten nearest are inaccessib
   assert.ok(reachable.mass<.12);
   assert.ok(blocked.every(p=>p.mass===.12));
 });
+
+test('an adult guppy close to the surface can lower its body before turning for falling food',()=>{
+  const {tank,a,p}=fixture('guppy',false);
+  a.size=1.245;
+  a.position={x:-.79,y:3.84,z:.61};
+  a.velocity={x:-.119,y:-.895,z:1.127};
+  p.x=.30; p.y=3.40; p.z=.70;
+  const first={...a.position}, facing={...a.velocity};
+  const scene=createSceneCollisions();
+  scene.update([],[],false);
+  advance(tank,.08,scene);
+  assert.ok(a.position.y<first.y && a.position.y>first.y-.2);
+  assert.equal(a.position.x,first.x);
+  assert.deepEqual(a.velocity,facing,'the fish keeps its body attitude until it has room to turn');
+  assert.equal(a.bites,0);
+  advance(tank,14,scene);
+  assert.ok(a.bites>0 && a.hunger<50);
+  assert.ok(a.position.x>first.x+.4);
+});
+
+test('a fish making room to turn near the surface cannot sink through a solid ledge',()=>{
+  const {tank,a,p}=fixture('guppy',false);
+  a.size=1.245; a.position={x:-.79,y:3.84,z:.61}; a.velocity={x:-.119,y:-.895,z:1.127};
+  p.x=.3; p.y=2.7; p.z=.70;
+  const scene=createSceneCollisions();
+  scene.update(scanSolids(new BoxGeometry(8,.10,4).translate(0,3.1,0)),[],false);
+  advance(tank,20,scene);
+  assert.ok(a.position.y>3.15);
+  assert.equal(a.bites,0);
+});

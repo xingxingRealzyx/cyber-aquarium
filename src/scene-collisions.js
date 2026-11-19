@@ -520,8 +520,8 @@ export function createSceneCollisions(equipment = []) {
     probe.size=data.size;
     return residentShape(makeResidentBox(probe),false);
   }, fitted);
-  function canSwimSegment(animal,from,to,incoming) {
-    return canPass(animal,from,to,incoming,instant,revision);
+  function canSwimSegment(animal,from,to,incoming,descend=false) {
+    return canPass(animal,from,to,incoming,instant,revision,descend);
   }
   function avoid(animal) {
     return {

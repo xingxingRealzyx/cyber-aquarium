@@ -107,6 +107,16 @@ export function feedingRoute(scene,animal,pellet,{detour=true,maxNodes=80}={}) {
   const key=[p.x,p.y,p.z,v?.x,v?.y,v?.z,animal.size,pellet.x,pellet.y,pellet.z,detour?maxNodes:0].join(',');
   if (cache.paths.has(key)) return cache.paths.get(key)?.map(point=>({...point}))??null;
   let nodes=approach(animal,p,pellet,v,benthic,checks);
+  if (!nodes && !benthic && p.y>3.35) {
+    // A fish beside the surface can lack the room to pitch its tail upward
+    // for a diving turn. Fin down while level with the previous stroke,
+    // then start turning only where the entire second leg is feasible.
+    const below={x:p.x,y:Math.max(2.9,p.y-.55*(animal.size??1)),z:p.z};
+    if (checks.canSwimSegment(animal,p,below,v,true)) {
+      const reentry=approach(animal,below,pellet,v,false,checks);
+      if (reentry) nodes=[{...below,descend:true},...reentry];
+    }
+  }
   if (!nodes && detour) nodes=plan(animal,pellet,benthic,checks,Math.max(0,Math.min(240,maxNodes)));
   if (nodes && benthic) nodes=floorPath(p,nodes);
   if (cache.paths.size>=64) cache.paths.clear();

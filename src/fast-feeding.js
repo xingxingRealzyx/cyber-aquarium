@@ -117,6 +117,13 @@ function walk(intent,dt) {
   const {a,fish,speed,plan,point,direction}=intent;
   if (!direction) return;
   const d=direction;
+  if (point.descend && !intent.atMouth) {
+    const depth=Math.min(a.position.y-point.y,dt*speed);
+    a.position.y-=depth;
+    if (a.position.y<=point.y+epsilon) plan.index++;
+    Object.assign(plan.position,a.position);
+    return;
+  }
   const fraction=d.turn>dt ? dt/d.turn : 1;
   const yaw=fraction===1 ? d.yaw : d.previousYaw+d.yawDelta*fraction;
   const pitch=fraction===1 ? d.pitch : d.previousPitch+d.pitchDelta*fraction;
@@ -200,7 +207,7 @@ export function advanceFastFeeding(state,seconds,scene,onElapsed) {
       const aligned=atMouth && (Math.hypot(v.x,v.y,v.z)<=.03 ||
         (food.x-p.x)*v.x+(food.y-p.y)*v.y+(food.z-p.z)*v.z>=-.01);
       const direction=point && !aligned ? heading(a,point,fish) : null;
-      const turn=direction?.turn ?? 0;
+      const turn=point?.descend ? 0 : direction?.turn ?? 0;
       if (atMouth) {
         dt=Math.min(dt,Math.max(.001,a.biteCooldown,turn));
       } else if (direction) {
