@@ -27,7 +27,7 @@ export const SPECIES = Object.freeze({
   discus: {
     maturityDays: 1.5, lifespanDays: 10, name: '七彩神仙鱼', latin: 'Symphysodon aequifasciatus', type: 'fish',
     mass: 1.50, temperature: [26, 30], ph: [5.8, 7.5], sensitivity: 1.2,
-    swim: { cruiseSpeed: .34, cruisingHeight: 1.55, pace: .65 }, schoolAffinity: .58,
+    swim: { cruiseSpeed: .56, cruisingHeight: 1.55, pace: 1.04 }, schoolAffinity: .58,
   },
   cardinal: {
     maturityDays: 1.25, lifespanDays: 7, name: '宝莲灯鱼', latin: 'Paracheirodon axelrodi', type: 'fish',
@@ -256,7 +256,20 @@ function combineClosestFallingPair(falling) {
   falling.splice(second, 1);
 }
 
-function addPellets(state, amount, seed = Math.random(), settled = false) {
+function grazerFeedingSpot(animal, seed, scene) {
+  const distance = .30 + .25*random(seed+19);
+  for (let i = 0; i < 8; i++) {
+    const angle = 2*Math.PI*(seed + i/8);
+    const dx = Math.cos(angle), dz = Math.sin(angle);
+    const x = animal.position.x + distance*dx, z = animal.position.z + distance*dz;
+    if (Math.abs(x) > 3.55 || Math.abs(z) > 1.55) continue;
+    const floor = {x, y:substrateHeight(x,z)+.04, z};
+    if (scene?.canDropFood?.(floor) === false || scene?.canGrazeFrom?.(animal,floor) === false) continue;
+    if (!scene?.grazerObstacle?.(animal,dx,dz,distance-.18)) return floor;
+  }
+}
+
+function addPellets(state, amount, seed = Math.random(), settled = false, scene) {
   if (!(amount > 0)) return;
   state.foodPellets ||= [];
   const count = Math.min(40, Math.max(12, Math.ceil(amount / .0025)));
@@ -269,15 +282,23 @@ function addPellets(state, amount, seed = Math.random(), settled = false) {
   const slots = settled
     ? MAX_BED_PELLETS - existing.length
     : Math.min(MAX_FALLING_PELLETS - existing.length, MAX_SURFACE_PELLETS - recipients.length);
+  // Scatter part of the same ration over hungry bottom dwellers. The grains
+  // enter at the surface and can still be intercepted by swimming fish.
+  const grazers = settled ? [] : state.animals.filter(a => a.alive && a.hunger >= 70 &&
+    SPECIES[a.species].type === 'invertebrate').sort((a,b) => b.hunger-a.hunger);
   for (let i = 0; i < count; i++) {
     const pelletSeed = random(seed + i * 1.37);
-    const x = (random(pelletSeed + 41) - .5) * 2.4, z = .4 + (random(pelletSeed + 42) - .5) * 1.1;
+    const spot = grazers.length && i%4 === 0
+      ? grazerFeedingSpot(grazers[(i/4)%grazers.length],pelletSeed,scene) : null;
+    const x = spot?.x ?? (random(pelletSeed + 41) - .5) * 2.4;
+    const z = spot?.z ?? .4 + (random(pelletSeed + 42) - .5) * 1.1;
     const y = settled ? substrateHeight(x,z) + .04 : 3.88 + random(pelletSeed + 43) * .1;
     if (i >= slots) {
       const nearby = nearestPellet(recipients, x, y, z);
       nearby.mass += amount / count;
     } else {
       const pellet = { id: key('pellet'), x, y, z, mass: amount / count, ageSeconds: settled ? 40 : 0, seed: pelletSeed };
+      if (spot) pellet.fastSinking = true;
       recipients.push(pellet);
       state.foodPellets.push(pellet);
     }
@@ -286,7 +307,7 @@ function addPellets(state, amount, seed = Math.random(), settled = false) {
 }
 
 /** A real mouth contact is the only way a fish can eat water-column feed. */
-export function consumePellet(state, animalId, pelletId) {
+export function consumePellet(state, animalId, pelletId, scene) {
   const a = state.animals.find(item => item.id === animalId);
   const p = state.foodPellets?.find(item => item.id === pelletId);
   if (state.paused || !a?.alive || !p || a.hunger < 8 || a.biteCooldown > 0 || !a.position) return { ok: false, grams: 0 };
@@ -294,6 +315,8 @@ export function consumePellet(state, animalId, pelletId) {
   if (Math.hypot(dx,dy,dz) > .30) return { ok: false, grams: 0 };
   const v = a.velocity || {x:0,y:0,z:0};
   if (Math.hypot(v.x,v.y,v.z) > .03 && dx*v.x + dy*v.y + dz*v.z < -.01) return { ok: false, grams: 0 };
+  if (SPECIES[a.species].type === 'invertebrate' && p.y > substrateHeight(p.x,p.z)+.18) return { ok: false, grams: 0 };
+  if (scene?.canGrazeFrom?.(a,p) === false) return { ok: false, grams: 0 };
   const mass = a.mass || SPECIES[a.species].mass;
   const amount = Math.min(p.mass, mass * .0045, mass * .02 * (a.hunger - 2) / 85);
   if (!(amount > 0)) return { ok: false, grams: 0 };
@@ -458,10 +481,10 @@ export function removeToy(state, id) {
 }
 
 /** Adds dry food in grams. Excess remains in the tank, consuming oxygen as it decays. */
-export function feed(state, grams = 0.08) {
+export function feed(state, grams = 0.08, scene) {
   if (!Number.isFinite(grams) || grams <= 0) return { ok: false, message: '投喂量必须大于 0' };
   const amount = clamp(grams, 0.001, 5);
-  addPellets(state, amount);
+  addPellets(state, amount, Math.random(), false, scene);
   state.lastFedHours = state.elapsedHours;
   record(state, `投喂 ${amount.toFixed(2)} g 饲料${state.food > 0.4 ? '，残饵偏多，会耗氧并产生氨。' : '。'}`, state.food > 0.4 ? 'warning' : 'info');
   return { ok: true, grams: amount, message: `投喂 ${amount.toFixed(2)} g` };
@@ -530,7 +553,7 @@ export function getAssessment(state) {
   return { level: 'good', label: '生态稳定', message: '过滤、溶氧和氮循环正常。少量投喂，保持观察。' };
 }
 
-const reproductionModel = { species: SPECIES, stage: animalLifeStage, spawn: spawnOffspring, record, substrateHeight, waterInRange };
+const reproductionModel = { species: SPECIES, stage: animalLifeStage, spawn: spawnOffspring, random, record, substrateHeight, waterInRange };
 
 function integrate(state, dt) {
   const w = state.water;
@@ -559,9 +582,11 @@ function integrate(state, dt) {
     }
   });
   w.ammonia += biomass * 0.008 / liters * thermal * dt;
-  const rottenFood = state.food * decayFraction(0.08 * thermal, dt);
-  for (const p of state.foodPellets || []) p.mass *= 1 - decayFraction(0.08 * thermal, dt);
+  const spoiledFraction = decayFraction(.08 * thermal, dt);
+  const foodBefore = state.food;
+  for (const p of state.foodPellets || []) p.mass *= 1 - spoiledFraction;
   reconcileFood(state);
+  const rottenFood = Math.max(0, foodBefore - state.food);
   const rottenWaste = state.detritus * decayFraction(0.035 * thermal, dt);
   state.detritus -= rottenWaste;
   let decayMass = rottenFood + rottenWaste;
@@ -778,7 +803,16 @@ export function restoreState(raw) {
       }
       if (fish && restored.alive) restored.infection = restoreInfection(a.infection);
       restored.metabolism = numeric(a.metabolism,restored.metabolism,.65,1.5);
-      for (const [axis,min,max] of [['x',-3.65,3.65],['y',.15,4.05],['z',-1.65,1.65]]) restored.position[axis] = numeric(a.position?.[axis],restored.position[axis],min,max);
+      // Sculling around an obstacle can take the center outside the preferred
+      // cruising band. Moving it back to that band on reload can undo the
+      // clearance it just gained or put its fins inside the same obstacle.
+      for (const [axis, min, max, waterMin, waterMax] of [
+        ['x', -3.65, 3.65, -3.98, 3.98], ['y', .15, 4.05, .15, 4.135], ['z', -1.65, 1.65, -1.98, 1.98],
+      ]) {
+        const coordinate = a.position?.[axis];
+        restored.position[axis] = Number.isFinite(coordinate) && coordinate >= waterMin && coordinate <= waterMax
+          ? coordinate : numeric(coordinate, restored.position[axis], min, max);
+      }
       for (const axis of ['x','y','z']) restored.velocity[axis] = numeric(a.velocity?.[axis],restored.velocity[axis],-4,4);
       const behaviors = ['swimming','seeking','eating','resting','gasping','grazing','schooling','chasing','darting','evading'];
       restored.behavior = restored.alive && behaviors.includes(a.behavior) ? a.behavior : restored.alive ? restored.behavior : 'dead';
@@ -833,6 +867,18 @@ export function restoreState(raw) {
       if (item.kind === 'author') {
         restored.placedAtSeconds = numeric(item.placedAtSeconds, 0, 0, base.behaviorSeconds);
       }
+      if (collection === 'toys' && item.contactPose) {
+        const {time,flow,position,rotations,bubbles} = item.contactPose;
+        const tupleList = (v,max) => Array.isArray(v) && v.length<=max && v.every(Number.isFinite);
+        if (Number.isFinite(time) && Math.abs(time-base.behaviorSeconds)<1e-8 &&
+            Number.isFinite(flow) && Math.abs(flow-base.currentSeconds)<1e-8 &&
+            tupleList(position,3) && position.length===3 && Math.abs(position[0])<=4 && Math.abs(position[2])<=2 &&
+            position[1]>=0 && position[1]<=4.5 && tupleList(rotations,512) && rotations.length%4===0 &&
+            rotations.every((_,i)=>i%4!==0 || Math.abs(Math.hypot(...rotations.slice(i,i+4))-1)<1e-5) &&
+            tupleList(bubbles,64) && bubbles.length%4===0) {
+          restored.contactPose={time,flow,position:[...position],rotations:[...rotations],bubbles:[...bubbles]};
+        }
+      }
       if (catalog[item.kind].surface) reserveSurfaceSlot(restored, usedSurfaceSlots, item.surfaceSlot);
       const palette = catalog[item.kind].colors;
       if (palette) {
@@ -858,6 +904,7 @@ export function restoreState(raw) {
       if (!p || !Number.isFinite(p.mass) || p.mass <= 1e-10) continue;
       const id = typeof p.id === 'string' && p.id.length < 100 && !pelletIds.has(p.id) ? p.id : key('pellet');
       const pellet={id,x:numeric(p.x,0,-3.65,3.65),y:numeric(p.y,3.9,.15,4.05),z:numeric(p.z,.4,-1.65,1.65),mass:numeric(p.mass,0,0,Number.MAX_SAFE_INTEGER),ageSeconds:numeric(p.ageSeconds,0,0,1e8),seed:numeric(p.seed,seedFromId(id),0,1)};
+      if (p.fastSinking === true) pellet.fastSinking = true;
       const settled = isSettledPellet(pellet);
       const layer = settled ? bed : falling;
       if (layer.length < (settled ? MAX_BED_PELLETS : MAX_FALLING_PELLETS)) {

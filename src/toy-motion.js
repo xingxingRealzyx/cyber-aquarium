@@ -8,6 +8,12 @@ const currentLoop = new EllipseCurve(0, 0, 2.86, 1.13);
 const point = new Vector2(), wave = new Vector3();
 const tau = 2 * Math.PI;
 
+export function floatOnSurface(model, x, z, waterLevel, time, yaw) {
+  sampleWaterSurface(x, z, time, wave);
+  model.position.set(x, waterLevel + wave.x, z);
+  model.rotation.set(-Math.atan(wave.z), yaw, Math.atan(wave.y), 'ZXY');
+}
+
 export function poseToy(model, toy, time, waterLevel, driftFloor) {
   const onSurface = TOYS[toy.kind].surface;
   const slot = onSurface ? (toy.surfaceSlot ?? toy.slot) : toy.slot;
@@ -17,10 +23,8 @@ export function poseToy(model, toy, time, waterLevel, driftFloor) {
   const z = point.y + .21 * Math.sin(time * .065 + point.x * .73);
   const swirl = tau * phase + .32 * Math.sin(time * .12 + slot);
   if (onSurface) {
-    sampleWaterSurface(x, z, time, wave);
-    model.position.set(x, waterLevel + wave.x, z);
     const yaw = toy.kind === 'swimRing' ? swirl : -.25 + .8 * Math.sin(swirl);
-    model.rotation.set(-Math.atan(wave.z), yaw, Math.atan(wave.y), 'ZXY');
+    floatOnSurface(model,x,z,waterLevel,time,yaw);
     return;
   }
 

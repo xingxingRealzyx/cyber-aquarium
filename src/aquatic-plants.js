@@ -79,7 +79,15 @@ class PlantMesh {
   contacts = { roots: [], leaves: [] };
 
   contactRows(target, first, rowSize, from, to) {
-    target.push(hullFromVertices(this.positions, first + rowSize * from, rowSize * (to - from + 1)));
+    const start=first+rowSize*from, count=rowSize*(to-from+1);
+    const shape=hullFromVertices(this.positions,start,count);
+    if (target===this.contacts.leaves) {
+      let maxFlex=0;
+      for (let i=start;i<start+count;i++) maxFlex=Math.max(maxFlex,this.flex[i]);
+      // The GPU applies this full lateral travel to leaves in the current.
+      shape.swayX=maxFlex*.073; shape.swayZ=maxFlex*.029;
+    }
+    target.push(shape);
   }
 
   vertex(point, tile, u, t, tint, shade, flex) {

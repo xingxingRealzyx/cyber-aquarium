@@ -18,6 +18,9 @@ function pairTank(species) {
   s.water.temperature = s.equipment.targetTemperature = Math.min(max, Math.max(min, s.water.temperature));
   const mother = addAnimal(s, species, 'female').animal;
   const father = addAnimal(s, species, 'male').animal;
+  mother.seed = .16; // Conceives in the first window; lifecycle tests start from a known brood.
+  mother.id = 'test-mother';
+  father.id = 'test-father';
   for (const a of s.animals) {
     a.lifeAgeHours = SPECIES[species].maturityDays * 24 + 1;
     a.hunger = 12;
@@ -89,14 +92,50 @@ test('pairing requires healthy adults of opposite sexes and the same species in 
 });
 
 test('matching stocking orders in different tanks still produce distinct offspring', () => {
-  const offspring = [.1, .9].map(seed => {
+  const offspring = [.16, .29].map(seed => {
     const { s, mother } = pairTank('guppy');
     mother.seed = seed;
     advanceSimulation(s, 2 + REPRODUCTION.guppy.hours);
     return s.animals.filter(a => a.origin === 'born').map(a => [a.id, a.seed, a.size]);
   });
-  assert.equal(offspring[0].length, 3);
+  for (const young of offspring) assert.equal(young.length, 3);
   assert.notDeepEqual(offspring[0], offspring[1]);
+});
+
+test('only about one in five eligible windows starts a brood, even in a tank with many pairs', () => {
+  const trials = 512;
+  for (const pairCount of [1, 8]) {
+    const { s: template, mother, father } = pairTank('guppy');
+    for (let i = 1; i < pairCount; i++) {
+      template.animals.push({ ...mother, id: 'female-' + i }, { ...father, id: 'male-' + i });
+    }
+    template.elapsedHours = 1.95;
+    let successes = 0;
+    for (let i = 0; i < trials; i++) {
+      const s = structuredClone(template);
+      s.animals.forEach((animal, j) => { animal.seed = ((i + .5) / trials + j * .137) % 1; });
+      advanceSimulation(s, .06);
+      assert.ok(s.broods.length <= 1);
+      successes += s.broods.length;
+    }
+    assert.ok(successes / trials > .15 && successes / trials < .25, `${pairCount} pairs: ${successes}/${trials}`);
+  }
+});
+
+test('a missed window stays missed across save reloads and different time steps, and can succeed later', () => {
+  const { s, mother } = pairTank('guppy');
+  mother.seed = .28; // This pair misses at hour two, then conceives at hour four.
+  advanceSimulation(s, 1.5);
+  const resumed = restoreState(s);
+  advanceSimulation(s, .5);
+  for (let i = 0; i < 12; i++) advanceSimulation(resumed, 1 / 24);
+  assert.deepEqual(s.broods, []);
+  assert.deepEqual(resumed.broods, []);
+  const afterMiss = restoreState(resumed);
+  advanceSimulation(s, 2);
+  for (let i = 0; i < 48; i++) advanceSimulation(afterMiss, 1 / 24);
+  assert.equal(s.broods[0]?.startedAtHours, 4);
+  assert.deepEqual(afterMiss.broods, s.broods);
 });
 
 test('attachment and parental loss have different consequences for eggs and carried young', () => {
@@ -210,6 +249,7 @@ for (const species of ['guppy', 'shrimp']) {
     // Keep one youngster with an unrelated mate, so its own lineage is unambiguous.
     for (const a of [...s.animals]) if (a !== first) removeAnimal(s, a.id);
     const mate = addAnimal(s, species, first.sex === 'female' ? 'male' : 'female').animal;
+    mate.seed = .16;
     let grandchild;
     for (let i = 0; i < 40 && !grandchild; i++) {
       if (i % 4 === 0) { feed(s, .015); advanceBehavior(s, 30); }

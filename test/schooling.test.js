@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Vector3 } from 'three';
 import { advanceBehavior } from '../src/behavior.js';
+import { applySchoolSteering, sampleFish } from '../src/schooling.js';
 import { createInitialState, SPECIES } from '../src/simulation.js';
 
 function pair(species = 'neon') {
@@ -16,6 +18,27 @@ function pair(species = 'neon') {
   }
   return tank;
 }
+
+test('an open-water cruise carries speed through a broad turn', () => {
+  const tank = pair(), fish = tank.animals[0];
+  tank.animals = [fish];
+  tank.behaviorSeconds = 40;
+  fish.seed = .75;
+  fish.position = {x:1.2, y:2.35, z:.15};
+  fish.velocity = {x:.5, y:0, z:0};
+  // The individual route is now astern, well clear of the glass and rocks.
+  let previousYaw = 0;
+  for (let frame = 0; frame < 60; frame++) {
+    const p = {...fish.position};
+    advanceBehavior(tank, 1/60);
+    const yaw = Math.atan2(fish.velocity.z, fish.velocity.x);
+    const speed = 60 * Math.hypot(fish.position.x-p.x, fish.position.y-p.y, fish.position.z-p.z);
+    assert.ok(Math.abs(yaw-previousYaw) * 60 < .95, 'cruising should use a wider arc than pursuit');
+    assert.ok(speed > .25, 'the fish keeps advancing while it comes around');
+    previousYaw = yaw;
+  }
+  assert.ok(Math.abs(previousYaw) > .4, 'the fish still follows its new course');
+});
 
 test('a tetra steers with the heading of a nearby tetra', () => {
   const tank = pair(), opposite = structuredClone(tank);
@@ -80,6 +103,49 @@ test('tightly spaced fish open a gap even when swimming in the same direction', 
   }
 });
 
+test('adult fish make room before a neighbour reaches their fins', () => {
+  const { animals } = pair('guppy');
+  const [first, second] = animals;
+  first.size = second.size = 1;
+  second.position = { ...first.position, x: first.position.x + 1 };
+  const neighbours = sampleFish(animals);
+  const firstGoal = { ...first.velocity }, secondGoal = { ...second.velocity };
+  applySchoolSteering(first, neighbours, firstGoal, .5, 0, false);
+  applySchoolSteering(second, neighbours, secondGoal, .5, 0, false);
+  assert.ok(firstGoal.x < first.velocity.x - .05 && secondGoal.x > second.velocity.x + .05);
+});
+
+test('two approaching groups can swim through a crowded tank without bouncing between neighbours', () => {
+  const tank = pair(), template = tank.animals[0];
+  tank.animals = Array.from({ length: 18 }, (_, i) => {
+    const lane = i % 3, column = Math.floor(i / 3);
+    return { ...structuredClone(template), id: 'swimmer-' + i, serial: i + 1,
+      species: lane === 0 ? 'angelfish' : 'harlequin', size: lane === 0 ? 1.1 : .8,
+      hunger: 40, seed: (i + .5) / 18,
+      position: { x: (column - 2.5) * 1.05, y: 2.3, z: (lane - 1) * .45 },
+      velocity: { x: column < 3 ? .75 : -.75, y: 0, z: 0 } };
+  });
+  const starts = tank.animals.map(a => new Vector3().copy(a.position));
+  const positions = starts.map(p => p.clone()), previous = starts.map(() => new Vector3());
+  const farthest = starts.map(() => 0);
+  const step = new Vector3();
+  for (let frame = 0; frame < 600; frame++) {
+    advanceBehavior(tank, 1 / 60);
+    for (const [i, a] of tank.animals.entries()) {
+      step.subVectors(a.position, positions[i]);
+      const length = step.length(), prior = previous[i].length();
+      if (Math.min(length, prior) > .004) {
+        assert.ok(step.dot(previous[i]) >= -.6 * length * prior,
+          a.id + ' bounced back in the next frame at cruising speed');
+      }
+      positions[i].copy(a.position);
+      farthest[i] = Math.max(farthest[i], positions[i].distanceTo(starts[i]));
+      previous[i].copy(step);
+    }
+  }
+  assert.ok(farthest.every(distance => distance > .2), 'every fish swam out, including those that circled back');
+});
+
 test('a hungry tetra can turn away from a nearby group to reach food', () => {
   const tank = pair();
   const [hungry, neighbour] = tank.animals;
@@ -114,7 +180,13 @@ test('a nearby author interrupts pursuit, accelerates the fish away and then rel
   assert.equal(fish.behavior, 'evading');
   assert.equal(fish.targetFoodId, null);
   assert.ok(fish.velocity.x > 1 && fish.position.x > origin + .5);
-  scene.avoid = () => ({author:null});
+  // The diver's moving limbs cross the entry distance during a stroke.
+  // The fish should finish escaping before turning around for the pellet.
+  scene.avoid = () => ({author:{x:1,y:0,z:0,distance:1.18}});
+  advanceBehavior(tank, .2, scene);
+  assert.equal(fish.behavior, 'evading');
+  assert.equal(fish.targetFoodId, null);
+  scene.avoid = () => ({author:{x:1,y:0,z:0,distance:1.34}});
   advanceBehavior(tank, 1 / 30, scene);
   assert.equal(fish.behavior, 'seeking');
   assert.equal(fish.targetFoodId, 'behind');

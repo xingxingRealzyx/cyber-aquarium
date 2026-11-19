@@ -3,7 +3,10 @@ import {
   reconcileFood, SPECIES, substrateHeight,
 } from './simulation.js';
 import { sampleFish, applySchoolSteering } from './schooling.js';
-import { limitResidentTurnAtGlass, residentContactStep, resolveResidentContacts } from './resident-collisions.js';
+import { makeResidentBox, moveResident, residentContactStep, residentGlassStride } from './resident-collisions.js';
+import { holdBack, steerClear } from './contact-steering.js';
+import { aboveGrazerReach, chooseGrazerFood, grazerMealTarget } from './grazer-feeding.js';
+import { steerGrazer } from './grazer-steering.js';
 import { planFishPlay } from './fish-play.js';
 import { REPRODUCTION } from './reproduction.js';
 
@@ -11,15 +14,16 @@ const clamp = (v,min,max) => Math.max(min,Math.min(max,v));
 const random = seed => { const n=Math.sin(seed*127.1+311.7)*43758.5453;return n-Math.floor(n); };
 const distance = (a,b) => Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
 const FISH_MIN_Y=.67;
+const turnRates = new WeakMap();
 
-// Radians per real second. Benthic grazers pivot more slowly than swimming fish.
+// Radians per motion second. Benthic grazers pivot more slowly than swimming fish.
 export function animalTurnRate(species) {
   if (species === 'snail') return .75;
   if (species === 'shrimp') return 1.2;
   return 1.5;
 }
 
-function steer(animal, tx, ty, tz, dt, response) {
+function steer(animal, tx, ty, tz, dt, response, cruising) {
   const v = animal.velocity;
   const horizontal = Math.hypot(v.x, v.z);
   const speed = Math.hypot(horizontal, v.y);
@@ -29,17 +33,27 @@ function steer(animal, tx, ty, tz, dt, response) {
   const targetSpeed = Math.hypot(targetHorizontal, ty);
   const targetYaw = targetHorizontal > targetSpeed * .01 ? Math.atan2(tz, tx) : yaw;
   const targetPitch = targetSpeed > 0 ? Math.atan2(ty, targetHorizontal) : pitch;
-  const yawDelta = Math.atan2(Math.sin(targetYaw - yaw), Math.cos(targetYaw - yaw));
+  let yawDelta = Math.atan2(Math.sin(targetYaw - yaw), Math.cos(targetYaw - yaw));
   const pitchDelta = targetPitch - pitch;
-  const turn = Math.hypot(yawDelta, pitchDelta);
-  const fraction = turn > 0 ? Math.min(1, animalTurnRate(animal.species) * dt / turn) : 0;
-  const nextYaw = yaw + yawDelta * fraction;
-  const nextPitch = pitch + pitchDelta * fraction;
+  let rate = turnRates.get(animal);
+  if (!rate) turnRates.set(animal, rate = {yaw:0, pitch:0});
+  // For a target immediately astern, either arc works. Keep the turn already
+  // underway when a moving target crosses the seam between +π and -π.
+  if (Math.abs(yawDelta) > Math.PI - .12 && yawDelta * rate.yaw < -.1) yawDelta += yawDelta > 0 ? -2*Math.PI : 2*Math.PI;
+  const turnLimit = cruising ? .84 : animalTurnRate(animal.species);
+  const gain = Math.min(cruising ? 2.2 : 9, turnLimit / Math.max(.00001, Math.hypot(yawDelta, pitchDelta)));
+  const responseFraction = 1 - Math.exp(-(cruising ? 4.2 : 14) * dt);
+  rate.yaw += (yawDelta*gain-rate.yaw)*responseFraction;
+  rate.pitch += (pitchDelta*gain-rate.pitch)*responseFraction;
+  const nextYaw = yaw + rate.yaw*dt;
+  const nextPitch = clamp(pitch + rate.pitch*dt, -Math.PI/2+.001, Math.PI/2-.001);
 
-  // Slow down through tight turns so we can capture a drifting pellet without orbiting it.
+  // Carry forward speed around a cruising turn. A precise turn towards a
+  // pellet or out of a tight gap still needs a much smaller turning radius.
   const alignment = Math.cos(nextPitch) * Math.cos(targetPitch) * Math.cos(targetYaw - nextYaw)
     + Math.sin(nextPitch) * Math.sin(targetPitch);
-  const cornerSpeed = targetSpeed * (.12 + .88 * Math.max(0, alignment));
+  const minimumFraction = cruising ? .60 : .12;
+  const cornerSpeed = targetSpeed * (minimumFraction + (1 - minimumFraction) * Math.max(0, alignment));
   const nextSpeed = speed + (cornerSpeed - speed) * (1 - Math.exp(-dt * response));
   const nextHorizontal = nextSpeed * Math.cos(nextPitch);
   v.x = nextHorizontal * Math.cos(nextYaw);
@@ -50,9 +64,22 @@ function steer(animal, tx, ty, tz, dt, response) {
 // Ease the entire stride as it approaches glass, keeping the actual path tangent
 // to the animal's heading. Clipping one component makes it slide sideways.
 function wallStride(position, velocity, min, max) {
+  // Outside the cruising band the blocked component is clipped separately.
+  // Other components can still carry the fish along the glass.
+  if (position <= min || position >= max) return 1;
   if (velocity === 0) return 1;
   const space = velocity > 0 ? max - position : position - min;
   return clamp(3 * space / Math.abs(velocity), 0, 1);
+}
+
+// Turn along a pane before reaching it. Spacing from schoolmates, a toy or a
+// rock can otherwise press a fish straight into the glass, where wallStride
+// holds it in place for as long as any of its heading points outward.
+function alongGlass(goal, axis, position, min, max, speed) {
+  const lead = .35;
+  const high = speed * (1.1 * (max - position) / lead - .1);
+  const low = -speed * (1.1 * (position - min) / lead - .1);
+  goal[axis] = clamp(goal[axis], low, high);
 }
 
 function roamTarget(animal,time,clutch) {
@@ -84,6 +111,7 @@ function roamTarget(animal,time,clutch) {
 
 function chooseFood(state,animal,reserved,scene) {
   const fish=SPECIES[animal.species].type==='fish';
+  if (!fish && scene?.grazerObstacle && scene.canGrazeFrom && scene.overlaps) return chooseGrazerFood(state,animal,reserved,scene);
   let chosen=null,best=Infinity;
   for(const p of state.foodPellets) {
     if(p.mass<=1e-10||reserved.has(p.id))continue;
@@ -100,18 +128,37 @@ function chooseFood(state,animal,reserved,scene) {
   return chosen;
 }
 
-function sinkFood(state, dt) {
+export function pelletFallSpeed(p) {
+  return (p.fastSinking ? .22 : .095) + random(p.seed+8)*.03;
+}
+
+// Integrate the oscillating current over the submerged part of the stroke.
+// This also works when an unobserved grain lands during a long fast-forward.
+export function fallingPosition(p, seconds) {
+  const age = p.ageSeconds, rate = pelletFallSpeed(p);
+  const xPhase = age*.7 + p.seed*9, zPhase = age*.5 + p.seed*7;
+  let dt = Math.min(seconds, Math.max(0,(p.y-substrateHeight(p.x,p.z)-.04)/rate));
+  let x, z, floor;
+  for (let pass = 0; pass < 3; pass++) {
+    x = clamp(p.x + .012/.7*(Math.cos(xPhase)-Math.cos(xPhase+dt*.7)),-3.6,3.6);
+    z = clamp(p.z + .008/.5*(Math.sin(zPhase+dt*.5)-Math.sin(zPhase)),-1.6,1.6);
+    floor = substrateHeight(x,z)+.04;
+    const next = Math.min(seconds,Math.max(0,(p.y-floor)/rate));
+    if (Math.abs(dt-next)<1e-8) break;
+    dt=next;
+  }
+  return { x, y:Math.max(floor,p.y-seconds*rate), z };
+}
+
+export function sinkFood(state, dt) {
   const bed = state.foodPellets.length > MAX_BED_PELLETS ? state.foodPellets.filter(isSettledPellet) : null;
   let merged = false;
   for(const p of state.foodPellets) {
+    if (isSettledPellet(p)) { p.ageSeconds+=dt; continue; }
+    Object.assign(p,fallingPosition(p,dt));
     p.ageSeconds+=dt;
-    if (isSettledPellet(p)) continue;
-    p.x=clamp(p.x+Math.sin(p.ageSeconds*.7+p.seed*9)*.012*dt,-3.6,3.6);
-    p.z=clamp(p.z+Math.cos(p.ageSeconds*.5+p.seed*7)*.008*dt,-1.6,1.6);
-    const floor = substrateHeight(p.x,p.z) + .04;
-    const y = p.y - (.095+random(p.seed+8)*.03)*dt;
-    if (y > floor + .001) { p.y = y; continue; }
-    p.y = floor;
+    if (!isSettledPellet(p)) continue;
+    p.y=substrateHeight(p.x,p.z)+.04;
     if (bed) {
       if (bed.length < MAX_BED_PELLETS) bed.push(p);
       else {
@@ -151,16 +198,20 @@ function step(state,dt,scene) {
     const fish = SPECIES[a.species].type === 'fish';
     const nearby = a.alive && fish ? scene?.avoid(a) : null;
     const author = nearby?.author;
-    const fleeing = !!author && author.distance < 1.15;
+    // A passing swimmer's fins move across the edge of the alert distance
+    // several times in a stroke. Finish the escape in clear water.
+    const fleeRadius = a.behavior === 'evading' ? 1.32 : 1.15;
+    const fleeing = !!author && author.distance < fleeRadius;
     const gasping = fish && state.water.oxygen < 3;
     const clutch = REPRODUCTION[a.species].kind === 'guarded' && state.broods?.find(b =>
       b.species === a.species && (b.motherId === a.id || b.fatherId === a.id));
     const food = a.alive && !fleeing && !gasping && a.hunger >= 8 ? chooseFood(state, a, reserved,scene) : null;
-    if (food) reserved.add(food.id);
+    if (food && (fish || !aboveGrazerReach(food))) reserved.add(food.id);
     if (fleeing || gasping || clutch || food || a.biteFlash > 0) busy.add(a.id);
     return { a, fish, food, gasping, clutch, author, fleeing, obstacle: nearby?.obstacle, foliage: nearby?.foliage };
   });
   const games = planFishPlay(state, dt, a => busy.has(a.id));
+  for (const a of state.animals) makeResidentBox(a, time);
   for(const { a, fish, food, gasping, clutch, author, fleeing, obstacle, foliage } of intents) {
     a.biteFlash=Math.max(0,(a.biteFlash||0)-dt);
     a.biteCooldown=Math.max(0,(a.biteCooldown||0)-dt);
@@ -176,6 +227,7 @@ function step(state,dt,scene) {
     a.targetFoodId = food?.id ?? null;
     const play = games?.get(a.id);
     let target = fleeing ? escapeTarget(a, author) : play?.target || food || roamTarget(a,time,clutch);
+    if(!fish && food)target=grazerMealTarget(a,food,time);
     if(gasping)target={x:target.x,y:3.88,z:target.z};
     if (fleeing) a.behavior = 'evading';
     else if (gasping) a.behavior = 'gasping';
@@ -201,8 +253,10 @@ function step(state,dt,scene) {
     }
     const speed = desiredSpeed * health * (.9 + a.metabolism * .1);
     // Arrive without orbiting the target; feeding is still guarded by contact.
-    const arrive = Math.min(1, d / (food ? .42 : .6));
+    const arrive = food && !fish && (target.x!==food.x || target.z!==food.z) ? 1 : Math.min(1, d / (food ? .42 : .6));
     const goal = { x: dx/d*speed*arrive, y: fish ? dy/d*speed*arrive : 0, z: dz/d*speed*arrive };
+    const cruising = fish && !busy.has(a.id) && !play;
+    let retreat;
     if(fish) {
       const affinity = busy.has(a.id) || play ? 0 : SPECIES[a.species].schoolAffinity;
       if (applySchoolSteering(a, neighbours, goal, speed, affinity, food && d < .6) && a.behavior === 'swimming') {
@@ -213,6 +267,18 @@ function step(state,dt,scene) {
         const weight = clamp(1 - obstacle.distance / clearance, 0, 1);
         const inward = Math.max(0, -(goal.x*obstacle.x + goal.y*obstacle.y + goal.z*obstacle.z));
         const push = weight * (inward + .65 * speed);
+        if (cruising && inward > 0) {
+          // Carry the existing stroke along the face. Repulsion alone can
+          // cancel the route and leave a fish repeatedly braking at a rock.
+          const normalSpeed = vel.x*obstacle.x + vel.y*obstacle.y + vel.z*obstacle.z;
+          const tx = vel.x - normalSpeed*obstacle.x;
+          const ty = vel.y - normalSpeed*obstacle.y;
+          const tz = vel.z - normalSpeed*obstacle.z;
+          const along = weight * inward / Math.max(.15, Math.hypot(tx, ty, tz));
+          goal.x += tx*along;
+          goal.y += ty*along;
+          goal.z += tz*along;
+        }
         goal.x += obstacle.x * push;
         goal.y += obstacle.y * push;
         goal.z += obstacle.z * push;
@@ -232,28 +298,41 @@ function step(state,dt,scene) {
         goal.z+=(rad>.01?rz/rad:0)*(1.05-rad)*1.8;
         goal.y+=Math.max(0,1.35-pos.y)*.7;
       }
+    } else {
+      retreat = steerGrazer(a,scene,target,goal,speed,time);
     }
-    steer(a, goal.x, goal.y, goal.z, dt, fleeing || play || food ? 5 : 2.2);
-    const glassStride = limitResidentTurnAtGlass(a, dt);
-    let stride = Math.min(glassStride, wallStride(pos.x, vel.x, -3.65, 3.65), wallStride(pos.z, vel.z, -1.65, 1.65));
-    if (fish) {
-      const bottom = Math.max(FISH_MIN_Y, substrateHeight(pos.x,pos.z) + .17);
-      stride = Math.min(stride, wallStride(pos.y, vel.y, bottom, 3.96));
-    }
-    pos.x += vel.x * dt * stride;
-    pos.z += vel.z * dt * stride;
+    const clearingContact = steerClear(a, goal, speed, time, fish);
+    const bottom = Math.max(FISH_MIN_Y, substrateHeight(pos.x,pos.z) + .17);
+    alongGlass(goal, 'x', pos.x, -3.65, 3.65, speed);
+    alongGlass(goal, 'z', pos.z, -1.65, 1.65, speed);
+    if (fish) alongGlass(goal, 'y', pos.y, bottom, 3.96, speed);
+    const start = { x: pos.x, y: pos.y, z: pos.z }, heading = { x: vel.x, y: vel.y, z: vel.z };
+    steer(a, goal.x, goal.y, goal.z, dt, fleeing || play || food ? 5 : 2.2, cruising && !clearingContact);
+    const stroke = retreat ?? vel;
+    let stride = Math.min(residentGlassStride(a, time, dt, stroke), wallStride(pos.x, stroke.x, -3.65, 3.65), wallStride(pos.z, stroke.z, -1.65, 1.65));
+    if (fish) stride = Math.min(stride, wallStride(pos.y, vel.y, bottom, 3.96));
+    pos.x = clamp(pos.x + stroke.x*dt*stride, Math.min(start.x,-3.65), Math.max(start.x,3.65));
+    pos.z = clamp(pos.z + stroke.z*dt*stride, Math.min(start.z,-1.65), Math.max(start.z,1.65));
     const floor=substrateHeight(pos.x,pos.z)+(fish?.17:.025);
-    pos.y=fish?clamp(pos.y+vel.y*dt*stride,Math.max(FISH_MIN_Y,floor),3.96):floor;
+    // A previous contact or an old save can leave the origin below its cruise
+    // band. Let it swim back in. Snapping it to the band can move a whole
+    // body width in one frame even when the fish is swimming horizontally.
+    if (fish) {
+      pos.y = clamp(pos.y + vel.y*dt*stride, Math.min(start.y, Math.max(FISH_MIN_Y, floor)), Math.max(start.y, 3.96));
+    } else {
+      pos.y = floor;
+    }
+    const exit = moveResident(a, start, heading, state.animals, time, scene, (fish ? .12 : .04) * dt, retreat);
+    if (exit) holdBack(a, exit, time);
   }
-  resolveResidentContacts(state.animals, time, scene?.constrain);
-  for (const { a, food } of intents) if (food) consumePellet(state, a.id, food.id);
+  for (const { a, food } of intents) if (food) consumePellet(state, a.id, food.id, scene);
 }
 
-/** Real seconds drive visibly continuous motion; ecology remains in simulated hours. */
-export function advanceBehavior(state,realDtSeconds,scene) {
-  if(state.paused||!Number.isFinite(realDtSeconds)||realDtSeconds<=0)return state;
+/** Advance locomotion, feeding and water flow by tank motion seconds. */
+export function advanceBehavior(state,motionSeconds,scene) {
+  if(state.paused||!Number.isFinite(motionSeconds)||motionSeconds<=0)return state;
   state.foodPellets ||= [];
-  let remaining=Math.min(realDtSeconds,30);
+  let remaining=Math.min(motionSeconds,30);
   const flow = (state.equipment?.filter !== false ? .78 : 0) + (state.equipment?.aerator !== false ? .22 : 0);
   state.currentSeconds = (state.currentSeconds ?? state.behaviorSeconds ?? 0) + remaining * flow;
   while (remaining > 1e-9) {

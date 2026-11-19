@@ -1,13 +1,14 @@
 import './style.css';
 import { createAquarium } from './aquarium.js';
-import { advanceBehavior } from './behavior.js';
+import { advancePlayback, isFastForward, playbackSpeeds } from './playback.js';
+import { placeNewResidents } from './resident-collisions.js';
 import { sceneryPanel } from './scenery-panel.js';
 import { REPRODUCTION } from './reproduction.js';
 import {
-  createInitialState, restoreState, advanceSimulation, addAnimal, addPlant, feed,
+  createInitialState, restoreState, addAnimal, addPlant, feed,
   changeWater, removeAnimal, removeDead, getAssessment, residentWaterRange, waterInRange, SPECIES,
   addHardscape, removeHardscape, removePlant, addToy, removeToy, animalLifeStage, relativeAdultSize, availableAnimalSlots,
-  corpseDecay, INFECTIONS, careForFish,
+  corpseDecay, INFECTIONS, careForFish, isSettledPellet,
 } from './simulation.js';
 
 const SAVE_KEY = 'chengjing.aquarium.v1';
@@ -38,11 +39,25 @@ let saveError = false;
 try {
   const raw = localStorage.getItem(SAVE_KEY);
   state = raw ? restoreState(JSON.parse(raw)) : createInitialState();
-  if (!raw) state.speed = 60;
 } catch {
   state = createInitialState();
-  state.speed = 60;
   saveError = true;
+}
+let stillFrame = null, stillContacts = null;
+function contactsForMotion(tank, seconds) {
+  return stillContacts ?? renderer?.prepareCollisions(tank, seconds);
+}
+// Apply explicit edits to the displayed still life without moving its other
+// inhabitants to their later background positions.
+function refreshStillLayout() {
+  if (!stillFrame) return;
+  const displayed=new Map(stillFrame.animals.map(animal=>[animal.id,animal]));
+  stillFrame={...stillFrame,
+    animals:state.animals.map(animal=>displayed.get(animal.id) ?? structuredClone(animal)),
+    toys:structuredClone(state.toys), hardscape:structuredClone(state.hardscape), plants:structuredClone(state.plants),
+    equipment:{...state.equipment},
+  };
+  stillContacts=renderer.prepareCollisions(stillFrame,0);
 }
 let panelOpen = false, activeTab = 'water', selectedId = null, autoRotate = false;
 let expandedKind = null, updateState = { phase: 'idle' }, lastPanelHTML = '';
@@ -108,7 +123,10 @@ function notify(message) {
   toastTimeout = setTimeout(() => $('#toast').classList.remove('visible'), 3600);
 }
 function persist() {
-  try { localStorage.setItem(SAVE_KEY, JSON.stringify(state)); }
+  try {
+    renderer?.saveToyPoses(state);
+    localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+  }
   catch { if (!saveError) notify('本地存档不可用，本次进度暂未保存'); saveError = true; }
 }
 function timeLabel(hours) {
@@ -135,6 +153,10 @@ function sexLabel(a) {
 function behaviorLabel(a) {
   if(!a.alive) return '已死亡 · 待捞起';
   if(state.paused) return '已暂停';
+  if(a.behavior === 'seeking' && SPECIES[a.species].type === 'invertebrate') return '正在寻找沉底饲料';
+  if(a.behavior === 'grazing' && a.hunger >= 70 && state.foodPellets.length) {
+    return state.foodPellets.some(isSettledPellet) ? '尚未找到可吃的底粮' : '等待饲料沉底';
+  }
   return ({seeking:'正在追逐饲料',eating:'正在进食',resting:'饱腹休憩',gasping:'浮头呼吸',grazing:'底部觅食',
     swimming:'自由游动',schooling:'跟随鱼群',chasing:'追逐同伴',darting:'与同伴嬉游',evading:'游开躲避潜水员'})[a.behavior] || '自由游动';
 }
@@ -279,14 +301,14 @@ function journalPanel() {
 }
 function settingsPanel() {
   return `${updateControls()}
-    <div class="section-label"><span>生态时间流速</span><button class="text-btn" data-action="pause">${state.paused?'继续模拟':'暂停模拟'}</button></div>
-    <div class="speed-options">${[[1,'实时'],[60,'60×'],[3600,'3600×']].map(([v,label])=>`<button data-speed="${v}" class="${state.speed===v?'selected':''}">${label}</button>`).join('')}</div>
-    <p class="micro-note">${state.speed===1?'现实 1 小时 = 缸内 1 小时。':state.speed===60?'现实 1 秒 = 缸内 1 分钟。':'现实 1 秒 = 缸内 1 小时；请留意水质和饥饿。'}${state.paused?' 当前已暂停生态演化。':''}关闭应用后生态暂停。</p>
+    <div class="section-label"><span>鱼缸倍速</span><button class="text-btn" data-action="pause">${state.paused?'继续模拟':'暂停模拟'}</button></div>
+    <div class="speed-options">${playbackSpeeds.map(v=>`<button data-speed="${v}" aria-pressed="${state.speed===v}" class="${state.speed===v?'selected':''}">${v===1?'实时':v+'×'}</button>`).join('')}</div>
+    <p class="micro-note">${isFastForward(state.speed)?`画面定格，缸内时间以 ${state.speed}× 快进。觅食、吞咽和饲料下沉都按缸内时间进行。切回低倍可看最新缸况。`:`画面和生态以 ${state.speed}× 同步播放。60× 和 3600× 会定格画面。`}${state.paused?' 当前已暂停。':''}</p>
     <div class="section-label"><span>桌面摆放</span><span>${desktop?'原生透明桌面':'浏览器预览'}</span></div>
     <div class="desktop-actions"><button class="secondary-btn ${pinned?'selected':''}" data-action="pin">${icon('pin')}${pinned?'已置顶':'置顶显示'}</button><button class="secondary-btn" data-action="compact">${icon('expand')}${compact?'标准大小':'小巧模式'}</button></div>
     <button class="wide-btn" data-action="reset-view">${icon('rotate')} 重置观察角度</button>
     ${desktop?`<button class="wide-btn" data-action="click-through">穿透鼠标 · 在${trayLocation}鱼图标中恢复</button>`:''}
-    <details class="model-note"><summary>关于这只鱼缸</summary><p>鱼缸由 GPU 实时渲染。水质遵循简化的氮循环、溶氧和温度模型；毒性随 pH 和温度变化，健康会累积损伤，鱼也会因缺氧、毒性与饥饿死亡。</p><p>每只生物都有独立状态；饲料需要实际接触才能被吃到。游动节奏保持自然，生态时间可独立加速。</p><p>这是生态模拟原型，参数经过玩法标定。鱼可能随机遭遇病毒或细菌感染，可在个体档案中护理。鱼、虾、螺会与同种异性成体繁殖；为便于在淡水缸体验，斑马螺卵囊在游戏中可直接孵出小螺。进度仅保存在此设备。</p><p>所有含氮读数统一以氮计，mg N/L。开关灯为手动，默认成熟滤菌缸。</p></details>`;
+    <details class="model-note"><summary>关于这只鱼缸</summary><p>鱼缸由 GPU 实时渲染。水质遵循简化的氮循环、溶氧和温度模型；毒性随 pH 和温度变化，健康会累积损伤，鱼也会因缺氧、毒性与饥饿死亡。</p><p>每只生物都有独立状态，饲料需要实际接触才能被吃到。</p><p>这是生态模拟原型，参数经过玩法标定。鱼可能随机遭遇病毒或细菌感染，可在个体档案中护理。鱼、虾、螺会与同种异性成体繁殖；为便于在淡水缸体验，斑马螺卵囊在游戏中可直接孵出小螺。进度仅保存在此设备。</p><p>所有含氮读数统一以氮计，mg N/L。开关灯为手动，默认成熟滤菌缸。</p></details>`;
 }
 const panelViews = {
   water: waterPanel,
@@ -303,7 +325,9 @@ function updatePanel() {
   const newPatient = patients.find(a => !knownPatients.has(a.id));
   if (newPatient) notify(`${animalLabel(newPatient)}出现${INFECTIONS[newPatient.infection.kind].label}，点「生物」查看。`);
   knownPatients = new Set(patients.map(a => a.id));
-  $('#render-stat').textContent=`WebGL 2 · ${Math.round(stats.fps||0)} FPS`;
+  const fast = isFastForward(state.speed);
+  $('#render-stat').textContent=fast?'WebGL 2 · 画面已定格':`WebGL 2 · ${Math.round(stats.fps||0)} FPS`;
+  $('.dock-caption').textContent=fast?`${state.paused?'已暂停':state.speed+'× 生态快进'} · 画面已定格 · 在设置中切回低倍`:'点击鱼看档案 · 拖动旋转 · 滚轮缩放';
   if (panelOpen && !(document.activeElement?.type==='range' && document.activeElement.matches(':active'))) {
     const content=$('#panel-content'), scroll=content.scrollTop, focused=document.activeElement;
     const html = panelViews[activeTab]();
@@ -424,7 +448,7 @@ function updateInspector() {
       <div><dt>代谢系数</dt><dd>${(a.metabolism||1).toFixed(2)}×</dd></div>
       <div><dt>当前食欲</dt><dd>${hunger>75?'十分饥饿':hunger>40?'想吃东西':hunger>12?'略有食欲':'已经吃饱'}</dd></div>
     </dl>
-    <p class="individual-note">${a.behavior==='gasping'?'氧气不足，优先改善供氧。':state.paused?'生态已暂停，继续模拟后才会进食。':'饥饿度越高，越积极觅食；吃到饲料后才会下降。'}</p>`;
+    <p class="individual-note">${a.behavior==='gasping'?'氧气不足，优先改善供氧。':state.paused?'生态已暂停，继续模拟后才会进食。':SPECIES[a.species].type==='invertebrate'?'虾和螺会沿底砂觅食。吃到沉底饲料后，累计摄食的口数和重量会增加。':'饥饿度越高，越积极觅食；吃到饲料后才会下降。'}</p>`;
 }
 function perform(action) {
   $('#hint').classList.add('dismissed');
@@ -439,7 +463,10 @@ function perform(action) {
   else if(action==='scenery') openPanel('scenery');
   else if(action==='settings') openPanel('settings');
   else if(action==='check-update' || action==='install-update') return void runUpdate(action==='install-update');
-  else if(action==='feed') { const result=feed(state); notify(result.ok?(state.paused?'饲料已入水 · 继续模拟后鱼会进食':'饲料已入水 · 饥饿的鱼会主动靠近进食'):result.message); }
+  else if(action==='feed') {
+    const result=feed(state,undefined,contactsForMotion(state,0));
+    notify(result.ok && state.paused ? '饲料已入水 · 继续模拟后生物会进食' : result.message);
+  }
   else if(action==='care') {
     const result = careForFish(state, selectedId);
     notify(result.message);
@@ -447,11 +474,13 @@ function perform(action) {
   else if(action==='change-water') { changeWater(state,.25); notify('已更换 25% 水 · 使用等温、除氯新水'); }
   else if(action==='remove-animal') {
     const result = removeAnimal(state, selectedId);
+    if (result.ok) refreshStillLayout();
     selectAnimal(null);
     notify(result.message);
   }
   else if(action==='remove-dead') {
     const {count} = removeDead(state);
+    if (count) refreshStillLayout();
     if (count) notify(`已捞起 ${count} 只遗体`);
   }
   else if(action==='rotate') { autoRotate=!autoRotate; renderer?.setAutoRotate(autoRotate); document.querySelector('[data-action="rotate"]').classList.toggle('selected',autoRotate); }
@@ -468,15 +497,20 @@ app.addEventListener('click', e=>{
   const sceneryAction = Object.keys(b.dataset).find(key => Object.hasOwn(sceneryActions, key));
   if(b.dataset.action) perform(b.dataset.action);
   else if(b.dataset.tab) openPanel(b.dataset.tab);
-  else if(b.dataset.equipment) { const key=b.dataset.equipment; state.equipment[key]=!state.equipment[key]; updatePanel(); persist(); }
+  else if(b.dataset.equipment) { const key=b.dataset.equipment; state.equipment[key]=!state.equipment[key]; refreshStillLayout(); updatePanel(); persist(); }
   else if(b.dataset.stockSex) { stockingSex=b.dataset.stockSex; updatePanel(); }
   else if(b.dataset.addAnimal) {
     const result = addAnimal(state, b.dataset.addAnimal, stockingSex === 'random' ? undefined : stockingSex);
+    if (result.ok) {
+      placeNewResidents(state,state.animals.length-1,contactsForMotion(state,0)?.overlaps);
+      refreshStillLayout();
+    }
     notify(result.message); updatePanel(); persist();
   }
   else if(b.dataset.showKind) { expandedKind = expandedKind === b.dataset.showKind ? null : b.dataset.showKind; updatePanel(); }
   else if(sceneryAction) {
     const result = sceneryActions[sceneryAction](state, b.dataset[sceneryAction]);
+    if (result.ok) refreshStillLayout();
     notify(result.message);
     if(result.ok) persist();
     updatePanel();
@@ -603,16 +637,25 @@ try {
   $('#render-stat').title=gl.getParameter(adapter?.UNMASKED_RENDERER_WEBGL ?? gl.RENDERER);
   placeDesktopAquarium();
   window.addEventListener('resize',()=>{renderer.resize();placeDesktopAquarium();});
-  let previous=performance.now(), elapsed=0, lastHitTest=0;
+  let previous=performance.now(), elapsed=0, lastHitTest=0, firstFrame=true;
   function frame(now) {
     const dt=Math.max(0,Math.min((now-previous)/1000,1)); previous=now; elapsed+=dt;
-    // After a stalled frame, resume along the curve without skipping an entire turn.
-    const motionDt=Math.min(dt,.1);
-    if (!state.paused) {
-      advanceSimulation(state,dt*state.speed/3600);
-      advanceBehavior(state,motionDt,renderer.prepareCollisions(state,motionDt));
+    const fast = isFastForward(state.speed);
+    if (fast && !stillFrame) {
+      stillFrame=structuredClone(state);
+      stillContacts=renderer.prepareCollisions(stillFrame,0);
+      if (firstFrame) placeNewResidents(stillFrame,0,stillContacts.overlaps);
+    } else if (!fast && stillFrame) {
+      const advanced=state.behaviorSeconds>stillFrame.behaviorSeconds+1e-7;
+      stillFrame=null;
+      stillContacts=null;
+      // Several foragers can finish at the same grain while the picture is
+      // held. Give each body clear water before showing the live view again.
+      if (advanced) placeNewResidents(state,0,renderer.prepareCollisions(state,0).overlaps);
     }
-    renderer.update(state,dt,elapsed,motionDt);
+    firstFrame=false;
+    const motionDt=advancePlayback(state,dt,contactsForMotion);
+    renderer.update(stillFrame ?? state,dt,elapsed,fast ? 0 : motionDt,fast);
     if (verifyUpdateFrame && document.visibilityState === 'visible' &&
         renderer.renderer.domElement.style.visibility !== 'hidden' && renderer.renderer.info.render.triangles > 0 && !gl.isContextLost()) {
       verifyUpdateFrame=false;

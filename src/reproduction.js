@@ -25,6 +25,7 @@ export const REPRODUCTION = Object.freeze({
 export const MAX_ANIMALS = 80;
 export const MAX_LIVING_ANIMALS = 40;
 const epsilon = 1e-8;
+const broodChance = .2;
 const carried = kind => kind === 'carried' || kind === 'livebearer';
 
 // A scheduled birth is already promised a place. Retained bodies count toward
@@ -90,6 +91,8 @@ function startBrood(state, hour, slots, model) {
   const pair = findPair(state, hour, model);
   if (!pair) return;
   const { mother, father, site } = pair;
+  // One stable draw per tank opportunity, even with many eligible pairs or a save reload.
+  if (model.random(mother.seed + hour) >= broodChance) return;
   const profile = REPRODUCTION[mother.species];
   const due = hour + profile.hours;
   state.broods.push({

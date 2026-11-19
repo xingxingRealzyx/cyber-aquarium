@@ -7,6 +7,9 @@ import { createTankBase } from './tank-base.js';
 import { createHardscape } from './hardscape.js';
 import { createSceneCollisions, scanSolids } from './scene-collisions.js';
 import { createFishModel as fishModel, animateFish } from './fish-model.js';
+import { createShrimpModel, animateShrimp } from './shrimp-model.js';
+import { createSnailModel, animateSnail } from './snail-model.js';
+import { grazerMaps, disposeGrazerMaps } from './grazer-materials.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createAquaticPlants } from './aquatic-plants.js';
@@ -48,54 +51,9 @@ function disposeObject(object) {
   });
 }
 
-function makeFin(points, color, opacity = .8) {
-  const shape = new THREE.Shape();
-  shape.moveTo(points[0][0], points[0][1]);
-  points.slice(1).forEach((p) => shape.lineTo(p[0], p[1]));
-  shape.closePath();
-  return mesh(new THREE.ShapeGeometry(shape), material(color, {
-    transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false,
-    roughness: .35, metalness: .08,
-  }));
-}
-
-function shrimpModel(seed) {
-  const group = new THREE.Group();
-  const red = material('#b8412b', { roughness:.28, metalness:.13 });
-  const pale = material('#dc7755', { roughness:.35 });
-  for (let i = 0; i < 6; i++) {
-    const t = i/5;
-    mesh(new THREE.SphereGeometry(1,12,8), i%2 ? red:pale, group, [.13-i*.055, .08+Math.sin(t*Math.PI)*.05,0], [.052,.055-t*.018,.045]);
-  }
-  const tail = makeFin([[-.13,.07],[-.27,.1],[-.23,.035]], '#c6533a', .8);
-  group.add(tail);
-  for (const s of [-1,1]) {
-    mesh(new THREE.SphereGeometry(.012,8,6), material('#11100d'), group, [.18,.13,s*.026]);
-    tube([[.16,.11,s*.02],[.25,.16,s*.06],[.39,.15,s*.12]],.003,pale,group,8);
-    for(let i=0;i<4;i++) tube([[.11-i*.05,.07,s*.025],[.08-i*.05,.025,s*.065],[.16-i*.06,0,s*.1]],.004,pale,group,6);
-  }
-  group.userData = { kind:'shrimp' };
-  return group;
-}
-function snailModel(seed) {
-  const group = new THREE.Group();
-  const shellMat = material('#a98a43', {roughness:.45,metalness:.1});
-  mesh(new THREE.SphereGeometry(1,20,14),material('#5a6546'),group,[0,.04,0],[.22,.045,.09]);
-  mesh(new THREE.SphereGeometry(1,24,16),shellMat,group,[-.015,.17,0],[.16,.17,.13]);
-  const points=[];
-  for(let i=0;i<90;i++) {
-    const t=i/89, a=t*Math.PI*5;
-    points.push([-.015+Math.cos(a)*t*.135,.17+Math.sin(a)*t*.14,.12*Math.sqrt(Math.max(0,1-t*t))+.012]);
-  }
-  tube(points,.009,material('#574b2c'),group,90);
-  for(const s of [-1,1]) tube([[.15,.06,s*.035],[.23,.14,s*.055],[.25,.17,s*.06]],.006,material('#65734e'),group,6);
-  group.userData={kind:'snail'};
-  return group;
-}
-
-export function createResidentModel(species, seed) {
-  if (species === 'shrimp') return shrimpModel(seed);
-  if (species === 'snail') return snailModel(seed);
+export function createResidentModel(species, seed, manager) {
+  if (species === 'shrimp') return createShrimpModel(seed, manager);
+  if (species === 'snail') return createSnailModel(seed, manager);
   return fishModel(species, seed);
 }
 
@@ -117,6 +75,9 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   let decoded=false;
   const sceneryLoader=new THREE.LoadingManager(()=>{decoded=true;});
   sceneryLoader.onStart=()=>{decoded=false;};
+  // Decode the shared grazer maps with the scenery so the first shrimp or
+  // snail added to an empty tank also appears fully textured on placement.
+  for (const tile of ['shrimp-color','snail-shell','snail-skin']) grazerMaps(tile, sceneryLoader);
   container.appendChild(renderer.domElement);
   const camera = new THREE.PerspectiveCamera(36,1,.1,60);
   const controls = new OrbitControls(camera,renderer.domElement);
@@ -207,7 +168,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   let plantsSignature=null;
   let plantsGroup=null;
   function rebuildPlants(plants) {
-    const replacement = createAquaticPlants(plants,time,sceneryLoader);
+    const replacement = createAquaticPlants(plants,waterClock,sceneryLoader);
     tank.add(replacement);
     if (plantsGroup) {
       tank.remove(plantsGroup);
@@ -323,7 +284,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     const ids = [...candidates];
     return ids.length ? ids[(ids.indexOf(cycleFrom) + 1) % ids.length] : null;
   }
-  function setSelectedAnimal(id){selectedAnimalId=id??null;}
+  function setSelectedAnimal(id){selectedAnimalId=id??null;viewDirty=true;}
   let pointerDown=null, lastPick=null;
   const onPointerDown=(event)=>{
     pointerDown=event.button===0?{x:event.clientX,y:event.clientY,id:event.pointerId,dragged:false}:null;
@@ -349,12 +310,17 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   renderer.domElement.addEventListener('pointercancel',onPointerCancel);
   renderer.domElement.addEventListener('pointerleave',onPointerLeave);
   let width=0,height=0,quality='high',frames=0,statsTime=0;
+  let viewDirty=true, autoOrbit=false, lastStillFrame=null, texturesReady=false;
+  const projectionAtDraw=new THREE.Matrix4();
+  controls.addEventListener('change',()=>{viewDirty=true;});
   function resize(){
     const r=container.getBoundingClientRect();width=Math.max(1,r.width);height=Math.max(1,r.height);
     renderer.setSize(width,height,false);desktopView.resize(width,height);
+    viewDirty=true;
   }
   const resizeObserver=new ResizeObserver(resize);resizeObserver.observe(container);resize();
   let lastLight=true;
+  let toyTime, toyFlow, toyLayout, toyScenery, toyPlants;
   function syncScenery(state,behaviorClock,flowClock) {
     hardscape.update(state.hardscape || []);
     const plants = state.plants ?? [];
@@ -364,6 +330,11 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
       plantsSignature = signature;
     }
     const placedToys=state.toys || [];
+    const layout=placedToys.map(t=>t.id).join('|');
+    if (Math.abs(toyTime-behaviorClock)<1e-8 && Math.abs(toyFlow-flowClock)<1e-8 &&
+        layout===toyLayout && toyScenery===hardscape.revision && toyPlants===plantsGroup) return;
+    toyTime=behaviorClock; toyFlow=flowClock; toyLayout=layout;
+    toyScenery=hardscape.revision; toyPlants=plantsGroup;
     for(const [id,model] of toys){
       if(placedToys.some(toy=>toy.id===id))continue;
       tank.remove(model);disposeObject(model);toys.delete(id);
@@ -373,24 +344,37 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
       if(!model){
         if (toy.kind === 'author') {
           const swimmer = createAuthorSwimmer(sceneryLoader);
-          model = createAuthorDisplay(swimmer, animateAuthorSwimmer, toy.slot, WATER_LEVEL, hardscape.driftFloor);
+          model = createAuthorDisplay(swimmer, animateAuthorSwimmer, toy.slot, WATER_LEVEL, hardscape.driftFloor, toy.placedAtSeconds ?? 0);
         } else {
           model=createToyModel(toy.kind, toy.color, sceneryLoader);
         }
         model.userData.toyKind=toy.kind;
+        if (toy.contactPose && Math.abs(toy.contactPose.flow-flowClock)<1e-8) model.userData.savedToyPose=toy.contactPose;
         tank.add(model);toys.set(toy.id,model);
       }
-      const clock = model.userData.author ? behaviorClock : flowClock;
-      if (model.userData.poseClock != null && Math.abs(model.userData.poseClock-clock)<1e-8 &&
-          model.userData.poseRevision===hardscape.revision) continue;
       if (model.userData.author) {
         const age = Math.max(0, behaviorClock - (toy.placedAtSeconds ?? 0));
-        model.userData.author.update(age, hardscape.revision);
+        model.userData.author.prepare(age, hardscape.revision);
       } else {
         poseToy(model,toy,flowClock,WATER_LEVEL,hardscape.driftFloor);
       }
-      model.userData.poseClock=clock;
-      model.userData.poseRevision=hardscape.revision;
+    }
+    collisions.arrangeToys(hardscape.solids,toys.values(),plantsGroup.userData.plantContacts,state.animals,behaviorClock,WATER_LEVEL,flowClock);
+    for (const toy of placedToys) {
+      if (toy.kind === 'author') toys.get(toy.id).userData.author.finish(Math.max(0,behaviorClock-(toy.placedAtSeconds ?? 0)));
+    }
+  }
+
+  function saveToyPoses(state) {
+    // A held fast-forward view can be older than the background simulation.
+    // Store only poses that belong to the clocks in this particular save.
+    const matching=Math.abs(state.behaviorSeconds-toyTime)<1e-8 && Math.abs(state.currentSeconds-toyFlow)<1e-8;
+    for (const toy of state.toys) {
+      const model=toys.get(toy.id);
+      const snapshot=matching && model && collisions.captureToyPose(model);
+      if (snapshot) toy.contactPose={...snapshot,flow:toyFlow};
+      else if (toy.contactPose && (Math.abs(toy.contactPose.time-state.behaviorSeconds)>1e-8 ||
+        Math.abs(toy.contactPose.flow-state.currentSeconds)>1e-8)) delete toy.contactPose;
     }
   }
 
@@ -409,10 +393,20 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     return collisions;
   }
 
-  function update(state,deltaSeconds,elapsedSeconds,motionDt=deltaSeconds){
-    const t=Number.isFinite(elapsedSeconds)?elapsedSeconds:time.value+Math.max(0,deltaSeconds);
-    time.value=t;
-    waterClock.value=state.currentSeconds ?? t;
+  function update(state,deltaSeconds,elapsedSeconds,motionDt=deltaSeconds,still=false){
+    controls.autoRotate=autoOrbit && !still;
+    controls.update(deltaSeconds);
+    if (still && lastStillFrame===state && !viewDirty && texturesReady && decoded &&
+        projectionAtDraw.equals(camera.projectionMatrix)) return;
+    const resumed=lastStillFrame && !still;
+    lastStillFrame=still ? state : null;
+    time.value=Number.isFinite(elapsedSeconds)?elapsedSeconds:time.value+Math.max(0,deltaSeconds);
+    const t=state.behaviorSeconds ?? time.value;
+    const flowClock=state.currentSeconds ?? t;
+    // Water and foliage wave frequencies are hundredths of a radian per
+    // second. A shared whole period preserves their phase in float shaders
+    // even after hours of 3600× playback.
+    waterClock.value=flowClock % (200*Math.PI);
     const light=state.equipment?.light!==false;
     if(light!==lastLight){
       fillLight.intensity=light?daylight.fill:.13;
@@ -428,14 +422,14 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     waterTintMat.opacity=.022+(1-clarity)*.21;
     waterTintMat.color.set(clarity>.5?'#6ca781':'#8c9958');
     particleMat.opacity=.15+(1-clarity)*.36;
-    syncScenery(state, state.behaviorSeconds ?? 0, waterClock.value);
+    syncScenery(state, state.behaviorSeconds ?? 0, flowClock);
     const currentIds=new Set();
     for(const animal of state.animals||[]){
       currentIds.add(animal.id);
       let model=animals.get(animal.id);
       const seed=seedOf(animal.seed??animal.id);
       if(!model){
-        model=createResidentModel(animal.species,seed);
+        model=createResidentModel(animal.species,seed,sceneryLoader);
         model.userData.animalId=animal.id;model.userData.seed=seed;animals.set(animal.id,model);fauna.add(model);
       }
       const alive=animal.alive!==false;
@@ -446,6 +440,19 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
       const decay = !alive && fish ? corpseDecay(animal) : 0;
       const size = animal.size ?? 1;
       model.scale.set(size, size * (1 - .13 * decay), size * (1 - .28 * decay));
+      const horizontal=Math.hypot(velocity.x||0,velocity.z||0);
+      const swimSpeed=Math.hypot(horizontal,velocity.y||0);
+      const step = state.paused ? 0 : motionDt;
+      if (resumed) {
+        model.userData.positionInitialized=false;
+        model.userData.orientationInitialized=false;
+      }
+      if (fish) animateFish(model,animal,step,swimSpeed,decay);
+      else if (alive) {
+        const graze = animal.behavior === 'grazing' || animal.behavior === 'eating';
+        const animate = animal.species === 'shrimp' ? animateShrimp : animateSnail;
+        animate(model, step, swimSpeed, graze);
+      }
       // State owns all locomotion and feeding; rendering never consumes food.
       if(hasPosition) model.position.set(p.x,p.y,p.z);
       else if(!model.userData.positionInitialized){
@@ -453,8 +460,6 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
         model.position.set(x,model.userData.kind==='fish'?1.3+random(seed+3)*1.7:sandHeight(x,z),z);
       }
       model.userData.positionInitialized=true;
-      const horizontal=Math.hypot(velocity.x||0,velocity.z||0);
-      const swimSpeed=Math.hypot(velocity.x||0,velocity.y||0,velocity.z||0);
       if(alive){
         const yaw=horizontal>.001?Math.atan2(-(velocity.z||0),velocity.x||0):(model.userData.headingYaw??0);
         model.userData.headingYaw=yaw;
@@ -475,10 +480,9 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
       }else if (!state.paused) {
         model.quaternion.rotateTowards(targetQuaternion,animalTurnRate(animal.species)*Math.max(0,motionDt));
       }
-      if (fish) animateFish(model,animal,state.paused ? 0 : motionDt,swimSpeed,decay);
     }
     for(const [id,model] of animals)if(!currentIds.has(id)){fauna.remove(model);disposeObject(model);animals.delete(id);}
-    broodDisplay.update(state.broods ?? [], animals, plantsGroup?.userData.leafSites, t);
+    broodDisplay.update(state.broods ?? [], animals, plantsGroup?.userData.leafSites, waterClock.value);
     for(let i=0;i<particleCount;i++){
       particlePositions[i*3]=(random(i+31)-.5)*7.7+Math.sin(t*.1+i)*.025;
       particlePositions[i*3+1]=.5+fract(random(i+64)+t*.007)*3.55;
@@ -511,19 +515,21 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
       ripple.scale.setScalar(.14+age*.36+i*.13);
       ripple.material.opacity=(1-age/2)*(.24-i*.045);
     }
-    controls.update();
     const chosen=animals.get(selectedAnimalId);
     selectionMarker.visible=!!chosen;
     if(chosen){
       chosen.getWorldPosition(selectionMarker.position);
       selectionMarker.quaternion.copy(camera.quaternion);
       selectionMarker.scale.setScalar(chosen.scale.x*(chosen.userData.kind==='fish'?1:.65));
-      selectionMarker.material.opacity=.72+Math.sin(t*2)*.12;
+      selectionMarker.material.opacity=.72+Math.sin((still?t:time.value)*2)*.12;
     }
     renderer.render(scene,camera);
+    texturesReady=decoded;
+    viewDirty=false;
+    projectionAtDraw.copy(camera.projectionMatrix);
     if(decoded && renderer.domElement.style.visibility) renderer.domElement.style.removeProperty('visibility');
     frames++;statsTime+=Math.max(0,deltaSeconds);
-    if(statsTime>=1){onStats({fps:Math.round(frames/statsTime),drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles});frames=0;statsTime=0;}
+    if(statsTime>=1 || still){onStats({fps:still?0:Math.round(frames/statsTime),drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles});frames=0;statsTime=0;}
   }
   function setQuality(value){quality=value;renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,quality==='low'?1:2));renderer.shadowMap.enabled=quality!=='low';resize();}
   function dispose(){
@@ -534,7 +540,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     renderer.domElement.removeEventListener('pointercancel',onPointerCancel);
     renderer.domElement.removeEventListener('pointerleave',onPointerLeave);
     broodDisplay.dispose();
-    disposeObject(scene);waterLight.dispose();keyLight.shadow.dispose();environment.dispose();renderer.dispose();renderer.domElement.remove();
+    disposeObject(scene);disposeGrazerMaps(sceneryLoader);waterLight.dispose();keyLight.shadow.dispose();environment.dispose();renderer.dispose();renderer.domElement.remove();
   }
-  return {update,prepareCollisions,resize,resetView,setDesktopLayout:desktopView.setLayout,setAutoRotate:(value)=>{controls.autoRotate=Boolean(value);},setQuality,dispose,renderer,camera,controls,hitTest,setSelectedAnimal,getAnimalScreenPositions,getBroodScreenPositions,getToyScreenPositions};
+  return {update,prepareCollisions,saveToyPoses,resize,resetView,setDesktopLayout:desktopView.setLayout,setAutoRotate:(value)=>{autoOrbit=Boolean(value);},setQuality,dispose,renderer,camera,controls,hitTest,setSelectedAnimal,getAnimalScreenPositions,getBroodScreenPositions,getToyScreenPositions};
 }

@@ -62,6 +62,11 @@ try {
         seconds:state.behaviorSeconds, surface:author.surfacing, snorkelY:author.snorkelTip.y,
         turns:Object.fromEntries([...residents].map(([id, o]) => [id,o.getWorldQuaternion(o.quaternion.clone()).toArray()])),
         seeking:state.animals.filter(a => a.targetFoodId).map(a => a.species),
+        bodies:state.animals.map(a => {
+          const model = residents.get(a.id);
+          const {x,y,z} = model.getWorldPosition(model.position.clone());
+          return {id:a.id, center:{x,y,z}, simulated:a.position, stroke:model.userData.swimPhase};
+        }),
       };
     };
   }, tank);
@@ -85,12 +90,25 @@ try {
     trace.push(...await page.evaluate(() => Array.from({length:10}, () => window.turnFrame(100))));
   }
   const peak = Object.fromEntries(Object.keys(paused.turns).map(id => [id,0]));
+  for (const frame of trace) {
+    for (const body of frame.bodies) {
+      assert.deepEqual(body.center, body.simulated, body.id+' must render at its collision center');
+    }
+  }
   let crossedSeam = false;
+  let cruisingStroke = false;
   const yaw = ([x,y,z,w]) => Math.atan2(2*(w*y-x*z),1-2*(y*y+z*z));
   for (let i=1; i<trace.length; i++) {
     const before = trace[i-1], after = trace[i];
     const dt = after.seconds - before.seconds;
     assert.ok(dt > 0 && dt <= .100001, 'motion clock advances continuously');
+    const previousFish = before.bodies.find(body => body.id === 'neon');
+    const fish = after.bodies.find(body => body.id === 'neon');
+    if (after.seconds - start.seconds > 1 && after.seeking.includes('neon')) {
+      const distance = Math.hypot(...['x','y','z'].map(axis => fish.center[axis]-previousFish.center[axis]));
+      const phase = (fish.stroke-previousFish.stroke+2*Math.PI) % (2*Math.PI);
+      if (distance/dt > .35 && phase/dt > 10) cruisingStroke = true;
+    }
     for (const [id, q] of Object.entries(before.turns)) {
       const next = after.turns[id];
       const dot = q.reduce((sum,value,j) => sum + value*next[j], 0);
@@ -102,6 +120,7 @@ try {
     }
   }
   assert.ok(crossedSeam, 'the rendered snail crosses due west via the short arc');
+  assert.ok(cruisingStroke, 'the swimming neon visibly powers its stroke toward a pellet');
   assert.ok(Object.values(peak).every(rate => rate > .01), 'each model visibly turns');
   assert.ok(trace.some(f => f.surface > .99 && f.snorkelY > 4.14));
   assert.ok(trace.at(-1).surface < .01, 'the swimmer submerges after breathing');

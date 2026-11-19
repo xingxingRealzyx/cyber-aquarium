@@ -29,7 +29,7 @@ async function verifyUpdateBadge() {
     };
   });
   await page.reload();
-  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  await page.waitForFunction(() => window.aquariumDiagnostics?.renderer?.triangles > 0);
   await page.mouse.move(520, 380);
   const settings = page.locator('#dock [data-action="settings"]');
   const dot = settings.locator('#update-dot');
@@ -64,11 +64,12 @@ async function verifyUpdateBadge() {
 
 try{
   await page.goto(process.env.AQUARIUM_URL||'http://127.0.0.1:5178/');
-  await page.waitForFunction(()=>window.aquariumDiagnostics?.stats.fps>0);
+  await page.waitForFunction(()=>window.aquariumDiagnostics?.renderer?.triangles>0);
   assert.equal(await page.locator('#error').isVisible(),false);
   assert.equal(await page.locator('#panel').isVisible(),false);
   assert.equal(await page.evaluate(()=>getComputedStyle(document.body).backgroundColor),'rgba(0, 0, 0, 0)');
   const first=await page.evaluate(()=>window.aquariumDiagnostics);
+  assert.equal(first.state.speed,1);
   assert.equal(first.state.animals.length,12);
   assert.equal(first.state.plants.length,9);
   assert.deepEqual(first.state.toys, []);
@@ -157,14 +158,23 @@ try{
   await page.mouse.click(360, 230, {button:'right'});
   assert.equal(await activeTab.getAttribute('data-tab'), 'settings');
   assert.equal(await page.locator('.event-list').count(), 0);
-  await page.locator('[data-speed="3600"]').click();
+  assert.deepEqual(await page.locator('[data-speed]').evaluateAll(buttons => buttons.map(b => Number(b.dataset.speed))), [1,2,4,60,3600]);
+  await page.locator('[data-speed="60"]').click();
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  const still = await page.evaluate(() => ({ toys:window.aquariumDiagnostics.screenToys, hours:window.aquariumDiagnostics.state.elapsedHours }));
+  await page.waitForFunction(hours => window.aquariumDiagnostics.state.elapsedHours > hours + .002, still.hours);
+  assert.deepEqual(await page.evaluate(() => window.aquariumDiagnostics.screenToys),still.toys);
   await page.locator('[data-action="pause"]').click();
+  await page.locator('[data-speed="4"]').click();
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  await page.locator('[data-speed="3600"]').click();
+  await page.evaluate(() => new Promise(requestAnimationFrame));
   const saved=await page.evaluate(()=>window.aquariumDiagnostics.state);
   const pausedToys=await page.evaluate(()=>window.aquariumDiagnostics.screenToys);
   assert.equal(saved.speed,3600); assert.equal(saved.paused,true);
   await page.setViewportSize({width:1040,height:760});
   await page.reload();
-  await page.waitForFunction(()=>window.aquariumDiagnostics?.stats.fps>0);
+  await page.waitForFunction(()=>window.aquariumDiagnostics?.renderer?.triangles>0);
   const restored=await page.evaluate(()=>window.aquariumDiagnostics.state);
   assert.equal(restored.animals.length,13); assert.equal(restored.plants.length,10);
   assert.deepEqual(restored.hardscape,saved.hardscape);

@@ -12,6 +12,9 @@ tank.animals = [];
 const guppies = ['female', 'male'].map(sex => addAnimal(tank, 'guppy', sex).animal);
 for (const fish of guppies) fish.lifeAgeHours = SPECIES.guppy.maturityDays * 24;
 const shrimp = addAnimal(tank, 'shrimp', 'female').animal;
+// These mothers conceive in the first two windows so the UI can show both broods together.
+guppies[0].seed = .29;
+shrimp.seed = .16;
 tank.paused = true;
 tank.speed = 3600;
 tank.infectionClock.nextAtHours = 38;
@@ -36,7 +39,7 @@ try {
       sessionStorage.setItem('breeding-fixture', '1');
     }
   }, tank);
-  const ready = () => page.waitForFunction(() => window.aquariumDiagnostics?.stats.triangles > 0);
+  const ready = () => page.waitForFunction(() => window.aquariumDiagnostics?.renderer?.triangles > 0);
   const read = () => page.evaluate(() => window.aquariumDiagnostics);
   const panel = page.locator('#panel');
   const inspector = page.locator('#inspector');
@@ -50,7 +53,14 @@ try {
   }
   async function toggle(label) {
     await settings();
+    const resume = label === '继续模拟';
+    if (resume) await panel.locator('[data-speed="3600"]').click();
     await panel.getByRole('button', { name: label, exact: true }).click();
+    // Switch to the current tank to inspect the clutch or fry that appeared during fast-forward.
+    if (!resume) {
+      await panel.locator('[data-speed="1"]').click();
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+    }
   }
   await page.reload();
   await ready();

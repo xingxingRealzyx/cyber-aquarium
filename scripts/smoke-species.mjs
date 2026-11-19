@@ -26,7 +26,7 @@ try {
   });
   page.on('response', response => { if (response.status() >= 400) errors.push(`${response.status()} ${response.url()}`); });
   await page.goto(process.env.AQUARIUM_URL || 'http://127.0.0.1:5178/');
-  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  await page.waitForFunction(() => window.aquariumDiagnostics?.renderer?.triangles > 0);
   const readAnimals = () => page.evaluate(() => window.aquariumDiagnostics.state.animals);
   const stock = await readAnimals();
   await page.mouse.move(500, 400);
@@ -54,7 +54,7 @@ try {
   await page.keyboard.press('Escape');
 
   await page.reload();
-  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  await page.waitForFunction(() => window.aquariumDiagnostics?.renderer?.triangles > 0);
   const restored = await readAnimals();
   assert.deepEqual(restored.map(a => a.id), [...stock, ...additions].map(a => a.id));
   for (const original of additions) {
@@ -106,7 +106,7 @@ try {
   await page.getByText(`${remainingIds.length} 存活`, { exact: true }).waitFor();
   assert.deepEqual(await page.locator('.resident').evaluateAll(rows => rows.map(row => row.dataset.select)), remainingIds);
   await page.reload();
-  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  await page.waitForFunction(() => window.aquariumDiagnostics?.renderer?.triangles > 0);
   assert.deepEqual((await readAnimals()).map(a => a.id), remainingIds);
   // Use a separate local save with an old fish close to its natural lifespan.
   const fixture = await page.evaluate(async () => {
@@ -132,7 +132,7 @@ try {
   }, fixture.tank);
   await page.setViewportSize({ width: 1040, height: 760 });
   await page.reload();
-  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  await page.waitForFunction(() => window.aquariumDiagnostics?.renderer?.triangles > 0);
   const clickModel = async id => {
     const point = await page.evaluate(id => window.aquariumDiagnostics.screenAnimals.find(a => a.id === id && a.visible), id);
     assert.ok(point, 'the 3D fish is on screen');
@@ -151,10 +151,14 @@ try {
   assert.equal(body.causeOfDeath, '自然衰老');
   assert.ok(body.corpseMass < body.mass && body.corpseMass > 0);
   await page.reload();
-  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  await page.waitForFunction(() => window.aquariumDiagnostics?.renderer?.triangles > 0);
   const savedBody = (await readAnimals()).find(a => a.id === fixture.oldId);
   assert.deepEqual(savedBody.position, body.position);
   assert.equal(savedBody.corpseMass, body.corpseMass);
+  // The saved body and its subsequent removal are visible in a viewing mode.
+  await page.mouse.click(520, 380, { button: 'right' });
+  await page.locator('[data-speed="1"]').click();
+  await page.keyboard.press('Escape');
   await clickModel(fixture.oldId);
   await inspector.getByText('自然衰老', { exact: true }).waitFor();
   assert.ok(parseInt(await inspector.locator('[data-field="decay"]').textContent(), 10) > 0);
@@ -166,7 +170,7 @@ try {
   await page.getByRole('button', { name: '添加生物', exact: true }).click();
   await page.getByRole('button', { name: '捞起全部遗体（1）', exact: true }).click();
   await page.reload();
-  await page.waitForFunction(() => window.aquariumDiagnostics?.stats.fps > 0);
+  await page.waitForFunction(() => window.aquariumDiagnostics?.renderer?.triangles > 0);
   assert.deepEqual((await readAnimals()).map(a => a.id), [fixture.youngId]);
   assert.deepEqual(errors, []);
   const report = { previews: previews.length, fishAdded: newSpecies, inspected: selected.label, restored: restored.length, removed: selected.label, remaining: remainingIds.length, corpseNetted: body.causeOfDeath, errors };

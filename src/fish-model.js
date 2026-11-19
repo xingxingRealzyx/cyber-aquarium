@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ConvexHull } from 'three/addons/math/ConvexHull.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createFishMaterials, applyDecayMaterial, hasFinAtlas } from './fish-materials.js';
 
@@ -30,7 +31,7 @@ const PROFILES = {
     iris: '#998061' },
   discus: { length: .84, nose: .43, top: .336, belly: .321, width: .105, tail: .169, spread: .126, roundTail: true, eye: .044,
     upper: discUpper, lower: discLower, girth: discWidth, noseLift: -.018, eyeStation: .835, iris: '#d84829', irisInnerRing: 7, pairedScale: 1.10,
-    pelvicStreamer: .19, beat: 5.1, amplitude: .35, flex: .14,
+    pelvicStreamer: .19, beat: 6.7, amplitude: .55, flex: .245, medianStroke: .05,
     dorsal: { front: .82, back: .032, tip: .51, height: .112, sweep: .062, backHeight: .41 },
     anal: { front: .61, back: .037, tip: .40, height: .100, sweep: .076, backHeight: .41 } },
   cardinal: { length: .68, nose: .33, top: .12, belly: .113, width: .067, tail: .171, spread: .102, roundedLobes: true, fork: .56, eye: .032,
@@ -183,6 +184,15 @@ function finGeometry(p, atlas = false) {
   const anal = midlineFin(p,{front:.45,back:.12,tip:.22,sign:-1,height:.067,sweep:.052,...p.anal});
   const surfaces = [];
   const add = (part, row) => {
+    if (p.medianStroke) {
+      const uv = part.attributes.uv;
+      const stroke = new Float32Array(uv.count);
+      // The root stays on the body. Soft rays flex most at the free margin.
+      if (row < 2) for (let i=0; i<uv.count; i++) {
+        stroke[i] = p.medianStroke * uv.getX(i)**2 * Math.sin(Math.PI*uv.getY(i));
+      }
+      part.setAttribute('medianStroke',new THREE.BufferAttribute(stroke,1));
+    }
     if (atlas) setFinAtlasRow(part, row);
     surfaces.push(part);
   };
@@ -253,6 +263,7 @@ function colorGeometry(geometry,hex) {
 
 // Two relative morph targets form a travelling wave. Blending their sine and
 // cosine coefficients on the GPU keeps the caudal peduncle and fin connected.
+const bodyWaveNumber = 7.1, finWaveNumber = 14;
 function swimAmplitude(p,x) {
   return Math.max(0,(p.nose*.56-x)/(p.length+p.tail))**1.65 * (p.flex ?? .22);
 }
@@ -261,18 +272,22 @@ function swimMorphs(geometry,p,pairedFins=false) {
   const pos=geometry.attributes.position,normals=geometry.attributes.normal;
   const positions=[[],[]], normalDeltas=[[],[]];
   for(let i=0;i<pos.count;i++) {
-    const x=pos.getX(i),z=pos.getZ(i),phase=(p.nose-x)*7.1;
+    const x=pos.getX(i),z=pos.getZ(i),phase=(p.nose-x)*bodyWaveNumber;
+    const margin = geometry.attributes.medianStroke?.getX(i) ?? 0;
+    const finPhase = (p.nose-x)*finWaveNumber;
     for(let wave=0;wave<2;wave++) {
       const offset=wave*Math.PI/2;
       const displacement=swimAmplitude(p,x)*Math.sin(phase+offset);
       // Tilt the normals by the spatial derivative of the bending surface.
-      const ahead=swimAmplitude(p,x+.0001)*Math.sin(phase-.00071+offset);
-      const slope=(ahead-displacement)/.0001;
+      const ahead=swimAmplitude(p,x+.0001)*Math.sin(phase-.0001*bodyWaveNumber+offset);
+      const slope=(ahead-displacement)/.0001 - (margin ? finWaveNumber*margin*Math.cos(finPhase+offset) : 0);
       const pectoral=pairedFins ? Math.sign(z)*smooth(Math.abs(z),p.width,p.width+.078)*Math.sin(phase+offset)*.032 : 0;
-      positions[wave].push(0,0,displacement+pectoral);
+      const ripple = margin ? margin*Math.sin(finPhase+offset) : 0;
+      positions[wave].push(0,0,displacement+pectoral+ripple);
       normalDeltas[wave].push(-slope*normals.getZ(i),0,0);
     }
   }
+  geometry.deleteAttribute('medianStroke');
   geometry.morphTargetsRelative=true;
   geometry.morphAttributes.position=positions.map(data=>new THREE.Float32BufferAttribute(data,3));
   geometry.morphAttributes.normal=normalDeltas.map(data=>new THREE.Float32BufferAttribute(data,3));
@@ -287,6 +302,7 @@ export function fishCollisionOutline(species) {
   if (outlines.has(species)) return outlines.get(species);
   const p = PROFILES[species];
   const sections = Array.from({length: 9}, () => new THREE.Box3());
+  const extremes = [];
   const vertex = new THREE.Vector3();
   for (const [i,g] of [bodyGeometry(p),tailGeometry(p),finGeometry(p),faceGeometry(p)].entries()) {
     const positions = g.attributes.position;
@@ -295,11 +311,21 @@ export function fishCollisionOutline(species) {
       const t = 1 + (vertex.x - p.nose) / (p.length+p.tail);
       const box = sections[Math.max(0,Math.min(sections.length-1,Math.floor(t*sections.length)))];
       const finBeat = i === 2 ? smooth(Math.abs(vertex.z),p.width,p.width+.078)*.032 : 0;
-      const sweep = i === 3 ? 0 : .90*(swimAmplitude(p,vertex.x)+finBeat);
+      const margin = g.attributes.medianStroke?.getX(j) ?? 0;
+      let stroke = swimAmplitude(p,vertex.x);
+      if (margin) {
+        // The two waves share one clock. Bound their combined excursion so
+        // the free edges do not claim extra space when the waves oppose.
+        const deltaPhase = (p.nose-vertex.x)*(finWaveNumber-bodyWaveNumber);
+        stroke = Math.hypot(stroke+margin*Math.cos(deltaPhase), margin*Math.sin(deltaPhase));
+      }
+      const sweep = i === 3 ? 0 : .90*(stroke+finBeat);
       vertex.z -= sweep;
       box.expandByPoint(vertex);
+      extremes.push(vertex.clone());
       vertex.z += 2*sweep;
       box.expandByPoint(vertex);
+      if (sweep) extremes.push(vertex.clone());
     }
     g.dispose();
   }
@@ -310,7 +336,16 @@ export function fishCollisionOutline(species) {
     return { center:s.getCenter(new THREE.Vector3()), half:s.getSize(new THREE.Vector3()).multiplyScalar(.5) };
   });
   const {min,max} = whole;
-  const outline = { bounds:[min.x,max.x,min.y,max.y,min.z,max.z], slices };
+  // Against a flat pane, only the outermost vertices of any swimming pose
+  // matter. A corner of a tilted section can lie well beyond the actual fin.
+  const hull = new ConvexHull().setFromPoints(extremes);
+  const points = new Set();
+  for (const {edge} of hull.faces) {
+    points.add(edge.head().point);
+    points.add(edge.next.head().point);
+    points.add(edge.tail().point);
+  }
+  const outline = { bounds:[min.x,max.x,min.y,max.y,min.z,max.z], slices, skinPoints: [...points] };
   outlines.set(species,outline);
   return outline;
 }
@@ -346,9 +381,20 @@ export function animateFish(model,animal,dt,swimSpeed,decay) {
     return;
   }
   const profile=PROFILES[animal.species] ?? PROFILES.neon;
-  const rate=(profile.beat ?? 8.3)+Math.min(swimSpeed,2)*4+(seeking?2.5:0);
+  let forwardSpeed = swimSpeed;
+  const p = animal.position, v = animal.velocity;
+  if (data.positionInitialized && p && dt > 0 && swimSpeed > .001) {
+    // The model still holds the previous frame's center. Only travel along the
+    // swimming direction powers a stroke; contact can also push a fish sideways.
+    const previous = model.position;
+    const advance = (p.x-previous.x)*v.x + (p.y-previous.y)*v.y + (p.z-previous.z)*v.z;
+    if (Number.isFinite(advance)) forwardSpeed = THREE.MathUtils.clamp(advance/(swimSpeed*dt), 0, swimSpeed);
+  }
+  data.strokeSpeed = THREE.MathUtils.damp(data.strokeSpeed ?? forwardSpeed, forwardSpeed, 12, Math.max(0,dt));
+  const effort = smooth(data.strokeSpeed,.025,.22);
+  const rate = (profile.beat ?? 8.3)*(.45+.55*effort) + Math.min(data.strokeSpeed,2)*4 + (seeking ? 2.5*effort : 0);
   data.swimPhase=(data.swimPhase+Math.max(0,dt)*rate)%pi2;
-  const amplitude=(profile.amplitude ?? .57)+Math.min(swimSpeed,.95)*.34;
+  const amplitude = (profile.amplitude ?? .57)*(.22+.78*effort) + Math.min(data.strokeSpeed,.95)*.34;
   const sine=Math.sin(data.swimPhase)*amplitude, cosine=Math.cos(data.swimPhase)*amplitude;
   for(const part of data.parts) {
     part.morphTargetInfluences[0]=cosine;

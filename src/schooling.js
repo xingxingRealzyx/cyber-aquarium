@@ -14,7 +14,8 @@ export function sampleFish(animals) {
 }
 
 export function applySchoolSteering(fish, neighbours, goal, speed, affinity, atFood) {
-  const pos = fish.position;
+  const pos = fish.position, v = fish.velocity;
+  const velocityLength = Math.max(.12, Math.hypot(v.x, v.y, v.z));
   let followX = 0, followY = 0, followZ = 0, weightSum = 0;
   let awayX = 0, awayY = 0, awayZ = 0;
   for (const peer of neighbours) {
@@ -22,7 +23,12 @@ export function applySchoolSteering(fish, neighbours, goal, speed, affinity, atF
     const dx = peer.x - pos.x, dy = peer.y - pos.y, dz = peer.z - pos.z;
     const distance = Math.hypot(dx, dy, dz);
     if (distance >= sight) continue;
-    const spacing = .16 + .31 * (fish.size + peer.animal.size);
+    // Longitudinal spacing gives a following fish room to turn. Side by side,
+    // schoolmates can still swim close together without touching.
+    const alongFish = Math.abs(dx * v.x + dy * v.y + dz * v.z) / velocityLength;
+    const alongPeer = Math.abs(dx * peer.headingX + dy * peer.headingY + dz * peer.headingZ);
+    const alignment = Math.max(alongFish, alongPeer) / Math.max(distance, .00001);
+    const spacing = .16 + (.36 + .25 * alignment) * (fish.size + peer.animal.size);
     if (distance < spacing) {
       // Give even two newly hatched fish at exactly the same point opposite exits.
       if (distance < .00001) {
@@ -47,7 +53,6 @@ export function applySchoolSteering(fish, neighbours, goal, speed, affinity, atF
 
   if (weightSum > 0) {
     // Let the individual route lead the turn before a school reaches the glass.
-    const v = fish.velocity;
     const margin = Math.min(3.65 - Math.abs(pos.x + v.x), 1.65 - Math.abs(pos.z + v.z),
       3.96 - (pos.y + v.y), pos.y + v.y - .67);
     const blend = affinity * Math.min(1, weightSum) * Math.max(0, Math.min(1, margin / .75));

@@ -21,7 +21,7 @@ try {
   const page = await application.firstWindow();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  const ready = () => page.waitForFunction(() => window.aquariumDiagnostics?.stats.triangles > 0);
+  const ready = () => page.waitForFunction(() => window.aquariumDiagnostics?.renderer?.triangles > 0);
   const dock = page.locator('#dock');
   const panel = page.locator('#panel');
   const inspector = page.locator('#inspector');
@@ -34,7 +34,7 @@ try {
     await panel.locator('[data-speed="3600"]').waitFor();
   }
   await ready();
-  assert.equal((await read()).speed, 60);
+  assert.equal((await read()).speed, 1);
   await openSettings();
   await panel.locator('[data-speed="3600"]').click();
   await page.waitForFunction(() => window.aquariumDiagnostics.state.animals.some(a => a.infection), null, { timeout: 60000 });

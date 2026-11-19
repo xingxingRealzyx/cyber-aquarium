@@ -64,6 +64,9 @@ test('a saved animal resting against a corner can turn and resume feeding', () =
     tank.animals = [];
     const a = addAnimal(tank, species).animal;
     const fish = species === 'neon';
+    // A full-grown shell can keep catching the pane while its foot slips
+    // sideways. Small, randomly stocked snails often clear this corner.
+    if (!fish) a.size = 1.18;
     a.position = { x: 3.65, y: fish ? .67 : substrateHeight(3.65, 1.65) + .025, z: 1.65 };
     a.velocity = { x: 0, y: 0, z: 0 };
     a.hunger = 90;
@@ -74,7 +77,7 @@ test('a saved animal resting against a corner can turn and resume feeding', () =
     }];
     const restored = restoreState(JSON.stringify(tank));
     run(restored, 16);
-    assert.ok(restored.animals[0].bites > 0);
+    assert.ok(restored.animals[0].bites > 0, species + ' must turn and reach the pellet');
   }
 });
 

@@ -11,9 +11,10 @@ const previewModule = `
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createResidentModel } from '/src/aquarium.js';
+import { disposeGrazerMaps } from '/src/grazer-materials.js';
 import { SPECIES } from '/src/simulation.js';
 
-export function renderPortraits(selection) {
+export async function renderPortraits(selection) {
   const renderer = new THREE.WebGLRenderer({alpha:true, antialias:true, preserveDrawingBuffer:true});
   renderer.setSize(420, 192);
   renderer.setClearColor(0, 0);
@@ -34,7 +35,15 @@ export function renderPortraits(selection) {
   const portraits = {};
   for(const species of selection.length ? selection : Object.keys(SPECIES)) {
     if (!Object.hasOwn(SPECIES, species)) throw new Error('Unknown species: ' + species);
-    const subject = createResidentModel(species, .37);
+    const manager = new THREE.LoadingManager();
+    const decoded = new Promise((resolve, reject) => {
+      manager.onLoad = resolve;
+      manager.onError = url => reject(new Error('Could not load portrait texture: ' + url));
+    });
+    manager.itemStart('portrait');
+    const subject = createResidentModel(species, .37, manager);
+    manager.itemEnd('portrait');
+    await decoded;
     subject.rotation.y = -.15; scene.add(subject);
     const box = new THREE.Box3().setFromObject(subject);
     const center = box.getCenter(new THREE.Vector3());
@@ -42,11 +51,13 @@ export function renderPortraits(selection) {
     const width = Math.max(size.x, size.y * 420/192) * 1.1;
     camera.left=-width/2; camera.right=width/2;
     camera.top=width*192/420/2; camera.bottom=-camera.top;
-    camera.position.copy(center).add(new THREE.Vector3(0,.055,3));
+    const elevation = species === 'shrimp' || species === 'snail' ? .68 : .055;
+    camera.position.copy(center).add(new THREE.Vector3(0,elevation,3));
     camera.lookAt(center); camera.updateProjectionMatrix();
     renderer.render(scene,camera);
     portraits[species] = renderer.domElement.toDataURL('image/png').split(',')[1];
     scene.remove(subject);
+    disposeGrazerMaps(manager);
   }
   renderer.dispose(); pmrem.dispose(); surface.dispose(); environment.dispose();
   return portraits;

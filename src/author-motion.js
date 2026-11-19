@@ -51,8 +51,8 @@ function surfaceAt(age, slot) {
   return MathUtils.smootherstep(cycle, 12, 21) * (1 - MathUtils.smootherstep(cycle, 22, 30));
 }
 
-function courseHeight(age, slot, level, previous, next, changedAt) {
-  const station = lapPhase(age, slot) * stationCount;
+function courseHeight(age, slot, level, previous, next, changedAt, placedAt) {
+  const station = lapPhase(age + placedAt, slot) * stationCount;
   const index = Math.floor(station), t = station - index;
   const blend = previous === next ? 1 : MathUtils.smootherstep(age - changedAt, 0, 6);
   function clearance(offset) {
@@ -99,7 +99,7 @@ function bubbleMaterial() {
 
 // Keep the animated rig and its trail as siblings: a bubble stays in tank
 // space after leaving the mouth, independently of the next kick or turn.
-export function createAuthorDisplay(swimmer, animate, slot, level, driftFloor) {
+export function createAuthorDisplay(swimmer, animate, slot, level, driftFloor, placedAt = 0) {
   const group = new Group();
   const geometry = new SphereGeometry(1, 14, 10);
   const trail = new InstancedMesh(geometry, bubbleMaterial(), breathStarts.length * puffDelays.length);
@@ -111,10 +111,11 @@ export function createAuthorDisplay(swimmer, animate, slot, level, driftFloor) {
   let surfacing = 0;
   let previousTerrain, terrain, changedAt = 0;
   function height(age) {
-    return courseHeight(age, slot, level, previousTerrain, terrain, changedAt);
+    return courseHeight(age, slot, level, previousTerrain, terrain, changedAt, placedAt);
   }
   function pose(age) {
-    const angle = tau * lapPhase(age, slot);
+    // Share a lap clock so a later placement cannot recreate another swimmer's exact course phase.
+    const angle = tau * lapPhase(age + placedAt, slot);
     const cosine = Math.cos(angle), sine = Math.sin(angle);
     const dx = laneWidth * sine * tau / lapSeconds, dz = -laneDepth * cosine * tau / lapSeconds;
     const surface = surfaceAt(age, slot);
@@ -135,7 +136,7 @@ export function createAuthorDisplay(swimmer, animate, slot, level, driftFloor) {
     return surface;
   }
 
-  function update(age, revision = 0) {
+  function prepare(age, revision = 0) {
     const next = terrainProfile(driftFloor, revision);
     if (next !== terrain) {
       if (terrain) {
@@ -147,42 +148,59 @@ export function createAuthorDisplay(swimmer, animate, slot, level, driftFloor) {
       terrain = next;
       changedAt = age;
     }
-    // Reconstruct any in-flight bubbles on a cold load or large frame gap by
-    // sampling the mouth pose at each emission. Cache only the active origins.
-    for (const birth of origins.keys()) {
-      if (age < birth || age - birth > maxBubbleAge) origins.delete(birth);
-    }
-    trail.count = 0;
+    // Sample new births on the raw course before the contact solver poses
+    // the body. Computing a historical mouth must never rewind the live rig.
+    for (const birth of origins.keys()) if (age < birth || age-birth > maxBubbleAge) origins.delete(birth);
+    activeBubbles.length=0;
     const cycle = Math.floor((age + slot * 2.31) / cycleLength);
-    for (let lap = cycle - 1; lap <= cycle; lap++) {
-      for (const burst of breathStarts) {
-        const start = lap * cycleLength + burst - slot * 2.31;
-        for (const [i, delay] of puffDelays.entries()) {
-          const birth = start + delay;
-          const life = age - birth;
-          if (birth < 0 || life < 0 || life > maxBubbleAge) continue;
-          let origin = origins.get(birth);
-          if (!origin) {
-            pose(birth);
-            origin = swimmer.userData.mouth.getWorldPosition(new Vector3());
-            group.worldToLocal(origin);
-            origins.set(birth, origin);
-          }
-          const radius = .025 + .008 * (i % 3) + .002 * life;
-          const y = origin.y + life * (.51 + i * .027 + .031 * life);
-          if (y + radius >= level) continue;
-          const drift = Math.min(1, life * 1.5);
-          dummy.position.set(origin.x + drift * .036 * Math.sin(birth * 4 + life * 3),
-            y, origin.z + drift * .026 * Math.cos(birth * 3 + life * 2));
-          dummy.scale.set(radius, radius * (.91 + .07 * Math.sin(life * 6 + i)), radius);
-          dummy.updateMatrix();
-          trail.setMatrixAt(trail.count++, dummy.matrix);
+    for (let lap = cycle - 1; lap <= cycle; lap++) for (const burst of breathStarts) {
+      const start = lap * cycleLength + burst - slot * 2.31;
+      for (const [i,delay] of puffDelays.entries()) {
+        const birth=start+delay, life=age-birth;
+        if (birth < 0 || life < 0 || life > maxBubbleAge) continue;
+        const fresh=!origins.has(birth);
+        if (fresh) {
+          pose(birth);
+          origins.set(birth,group.worldToLocal(swimmer.userData.mouth.getWorldPosition(new Vector3())));
         }
+        activeBubbles.push({birth,life,i,fresh});
       }
     }
     surfacing = pose(age);
+    group.worldToLocal(swimmer.userData.mouth.getWorldPosition(courseMouth));
+  }
+
+  const activeBubbles = [], courseMouth = new Vector3();
+  const lastOffset = new Vector3(), currentOffset = new Vector3();
+  let lastAge;
+  function finish(age) {
+    group.worldToLocal(swimmer.userData.mouth.getWorldPosition(currentOffset)).sub(courseMouth);
+    trail.count = 0;
+    for (const {birth,life,i,fresh} of activeBubbles) {
+      const origin = origins.get(birth);
+      if (fresh) {
+        const t = lastAge == null || age <= lastAge ? 1 : MathUtils.clamp((birth-lastAge)/(age-lastAge),0,1);
+        origin.addScaledVector(lastOffset,1-t).addScaledVector(currentOffset,t);
+      }
+      const radius = .025 + .008 * (i % 3) + .002 * life;
+      const y = origin.y + life * (.51 + i * .027 + .031 * life);
+      if (y + radius >= level) continue;
+      const drift = Math.min(1, life * 1.5);
+      dummy.position.set(origin.x + drift * .036 * Math.sin(birth * 4 + life * 3),
+        y, origin.z + drift * .026 * Math.cos(birth * 3 + life * 2));
+      dummy.scale.set(radius, radius * (.91 + .07 * Math.sin(life * 6 + i)), radius);
+      dummy.updateMatrix();
+      trail.setMatrixAt(trail.count++, dummy.matrix);
+    }
+    lastAge=age;
+    lastOffset.copy(currentOffset);
     trail.visible = trail.count > 0;
     if (trail.count) trail.instanceMatrix.needsUpdate = true;
+  }
+
+  function update(age, revision = 0) {
+    prepare(age,revision);
+    finish(age);
   }
 
   function diagnostics() {
@@ -196,6 +214,18 @@ export function createAuthorDisplay(swimmer, animate, slot, level, driftFloor) {
       snorkelTip: vector(swimmer.userData.snorkelTip.getWorldPosition(sample)), bubbles};
   }
 
-  group.userData.author = { swimmer, update, diagnostics };
+  function captureBubbles() {
+    return [...origins].flatMap(([birth,origin])=>[birth,...origin.toArray()]);
+  }
+  function restoreBubbles(saved) {
+    for (let i=0;i<saved.length;i+=4) {
+      const bubble=activeBubbles.find(b=>b.birth===saved[i]);
+      if (!bubble) continue;
+      origins.get(bubble.birth).fromArray(saved,i+1);
+      bubble.fresh=false;
+    }
+  }
+
+  group.userData.author = { swimmer, update, prepare, finish, diagnostics, captureBubbles, restoreBubbles };
   return group;
 }

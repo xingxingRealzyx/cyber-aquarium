@@ -9,6 +9,18 @@ import {
 
 const totalNitrogen = s => s.water.ammonia + s.water.nitrite + s.water.nitrate;
 
+test('reloading preserves a fish sculling beside the glass outside its usual cruising band', () => {
+  const state = createInitialState();
+  const fish = state.animals[0];
+  fish.position = { x: 3.67, y: 2.3, z: -1.70 };
+  fish.velocity = { x: -.21, y: .03, z: .09 };
+  const restored = restoreState(JSON.stringify(state)).animals[0];
+  assert.deepEqual(restored.position, fish.position);
+  assert.deepEqual(restored.velocity, fish.velocity);
+  fish.position = { x: 40, y: -5, z: -20 };
+  assert.deepEqual(restoreState(state).animals[0].position, { x: 3.65, y: .15, z: -1.65 });
+});
+
 test('legacy aquascapes retain their planted beds and original stone and driftwood layout', () => {
   const legacy = createInitialState();
   delete legacy.hardscape;
