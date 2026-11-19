@@ -12,6 +12,16 @@ const palettes = {
   angelfish: { belly: [203, 210, 198], side: [169, 179, 168], back: [84, 89, 70] },
   zebra:     { belly: [209, 204, 167], side: [182, 176, 124], back: [88, 94, 65] },
   harlequin: { belly: [228, 191, 154], side: [195, 128, 89], back: [111, 78, 53] },
+  discus:    { belly: [206, 148, 104], side: [183, 76, 48], back: [105, 76, 56] },
+  cardinal:  { belly: [210, 191, 174], side: [115, 131, 126], back: [75, 81, 66] },
+  rummynose: { belly: [219, 220, 207], side: [180, 193, 185], back: [112, 128, 111] },
+  blackneon: { belly: [202, 210, 190], side: [142, 155, 138], back: [87, 99, 75] },
+  cherrybarb:{ belly: [224, 174, 131], side: [185, 78, 60], back: [125, 77, 55] },
+  tigerbarb: { belly: [234, 209, 156], side: [221, 166, 76], back: [143, 111, 53] },
+  galaxy:    { belly: [173, 145, 110], side: [64, 89, 107], back: [49, 69, 71] },
+  blackskirt:{ belly: [195, 204, 196], side: [164, 178, 177], back: [95, 103, 100] },
+  boesemani: { belly: [214, 198, 157], side: [217, 145, 64], back: [129, 119, 72] },
+  platy:     { belly: [240, 193, 133], side: [222, 116, 54], back: [166, 86, 44] },
 };
 const guppyPigments = [[213, 80, 29], [220, 141, 37], [179, 72, 48], [224, 102, 32]];
 const indigo = [25, 36, 44];
@@ -24,6 +34,106 @@ const smooth = (a, b, x) => {
   return t * t * (3 - 2 * t);
 };
 const band = (x, center, radius, edge) => 1 - smooth(radius - edge, radius + edge, Math.abs(x - center));
+
+// Species markings use the same local flank coordinates on both sides. Sizes and
+// phases vary between residents while diagnostic stripes, bars and spots stay put.
+const flankPatterns = {
+  discus(rgb, u, h, phase, marks) {
+    const bars = band(fract(8.7 * u + .18 * Math.sin(5 * h + phase * .25)), .5, .13, .09);
+    layer(rgb, [66, 62, 54], .30 * bars);
+    // Red turquoise discus have winding pale blue lines on the flanks and operculum.
+    // A pair of dislocations makes individual streaks branch, then run out on the cheek.
+    const forks = (Math.atan2(h-.57,1.4*(u-.29)) - Math.atan2(h-.36,1.1*(u-.69))) / TAU;
+    const warp = pigmentNoise(6.1*u,4.5*h,marks.variant+65) + .47*pigmentNoise(11*u,7*h,marks.variant+30);
+    const path = h * 8.7 + .72 * Math.sin(7.5*u + 3.1*h + phase*.28) + forks + 1.33*warp
+      + .35 * Math.sin(15*u - 4.8*h) + .32 * Math.sin(16*h + 7*u + phase*.36) + .13*Math.cos(14*u-24*h);
+    const row = Math.floor(path), across = fract(path);
+    const width = .142 + .045*Math.sin(8*u+17*h+phase) + .025*Math.sin(19*u-7*h);
+    let line = band(across, .50, width, .043);
+    // Some streaks split into a finer side branch and meet again. Offset every
+    // fork independently so the open loops do not form a regular lattice.
+    const start = .09 + .61*noiseCorner(row,1,marks.variant+81);
+    const span = .22 + .19*noiseCorner(row,7,marks.variant+28);
+    const t = (u-start)/span;
+    if (t>0 && t<1) {
+      const arc = Math.sin(Math.PI*t);
+      const branch = .5 + (row%2 ? -.41 : .41)*arc;
+      line = Math.max(line,band(across,branch,.061+.031*arc,.03)*.92);
+    }
+    const breaks = .12 + .87 * smooth(-.71,.12,Math.sin(16*u + 12*h + phase) + .6*Math.cos(11*h - 13*u) + .9*warp);
+    layer(rgb, [48, 123, 124], band(fract(path), .50, .24, .07) * breaks * .68);
+    layer(rgb, [97, 199, 192], line * breaks * (.76 + .22*Math.sin(Math.PI*h)));
+    layer(rgb, [164, 219, 201], band(fract(path), .56, .06, .035) * breaks * .65);
+  },
+  cardinal(rgb, u, h) {
+    const stripe = .56 + .085 * Math.sin(2.8*u);
+    const length = smooth(.01,.08,u) * (1-smooth(.84,.94,u));
+    layer(rgb, [198, 35, 42], band(h, stripe-.24, .18, .042) * length);
+    layer(rgb, [28, 73, 90], band(h, stripe, .108, .022) * length);
+    layer(rgb, [14, 163, 196], band(h, stripe+.012, .075, .016) * length);
+    layer(rgb, [79, 225, 216], band(h, stripe+.050, .026, .014) * length);
+  },
+  rummynose(rgb, u, h) {
+    const edge = .74 - .045 * Math.cos((h-.58)*5);
+    layer(rgb, [188, 41, 43], smooth(edge-.055,edge+.035,u) * (.68 + .31*smooth(.04,.36,h)));
+    layer(rgb, [217, 59, 50], smooth(.86,.98,u) * .50);
+    layer(rgb, [38, 43, 44], band(h, .50, .088, .03) * (1-smooth(.06,.23,u)));
+    layer(rgb, [211, 221, 195], band(h, .62, .030, .02) * (1-smooth(.56,.72,u)) * .62);
+  },
+  blackneon(rgb, u, h) {
+    const stripe = .61 + .041 * Math.sin(Math.PI*u);
+    const length = (1-smooth(.79,.87,u));
+    layer(rgb, [36, 49, 53], band(h, stripe-.13, .115, .035) * length);
+    layer(rgb, [212, 223, 167], band(h, stripe+.024, .043, .012) * length);
+    layer(rgb, [153, 206, 165], band(h, stripe-.004, .021, .010) * length * .87);
+  },
+  cherrybarb(rgb, u, h, phase) {
+    const middle = .50 + .043 * Math.sin(Math.PI*u);
+    const body = smooth(.035,.11,u) * (1-smooth(.79,.94,u));
+    layer(rgb, [171, 55, 44], body * band(h, .46, .26, .09) * .62);
+    layer(rgb, [101, 63, 53], body * band(h, middle, .043, .022) * (.52+.36*Math.cos(22*u + phase*.24)**2));
+    layer(rgb, [79, 63, 52], band(u, .125, .046, .023) * band(h, middle, .066, .034));
+  },
+  tigerbarb(rgb, u, h) {
+    // Four black bars cross the caudal peduncle, rear flank, dorsal shoulder and eye.
+    const lean = h-.5;
+    const bars = Math.max(band(u,.10+.025*lean,.050,.014), band(u,.37+.13*lean,.063,.016),
+      band(u,.59+.15*lean,.068,.015), band(u,.845-.075*lean,.036,.012));
+    layer(rgb, [34, 43, 42], bars * (.84+.15*smooth(.08,.45,h)));
+    layer(rgb, [213, 101, 54], smooth(.90,.99,u) * .82);
+  },
+  galaxy(rgb, u, h, _phase, marks) {
+    const row = h * 4.3, col = u * 12.6 + .5*(Math.floor(row)%2);
+    const x = Math.floor(col), y = Math.floor(row);
+    const dx = fract(col) - (.34 + .32*noiseCorner(x,y,marks.variant+39));
+    const dy = fract(row) - (.31 + .38*noiseCorner(x,y,marks.variant+42));
+    const radius = .17 + .11*noiseCorner(x,y,marks.variant+14);
+    const dot = 1-smooth(radius-.048, radius+.025, Math.hypot(dx,dy));
+    const flank = smooth(.025,.10,u) * (1-smooth(.70,.84,u)) * smooth(.09,.22,h) * (1-smooth(.88,.99,h));
+    layer(rgb, [228, 211, 158], dot * flank);
+    layer(rgb, [205, 127, 72], (1-smooth(.03,.22,h)) * .65);
+  },
+  blackskirt(rgb, u, h) {
+    const rear = (1-smooth(.34,.60,u+.21*(h-.45))) * (.87-.34*h);
+    layer(rgb, [57, 64, 65], rear);
+    const bars = Math.max(band(u,.59-.045*(h-.5),.034,.013),band(u,.74-.024*(h-.5),.030,.013));
+    layer(rgb, [43, 49, 49], bars * smooth(.13,.40,h) * .87);
+  },
+  boesemani(rgb, u, h) {
+    const split = smooth(.44,.65,u-.045*Math.sin(h*5));
+    layer(rgb, [83, 130, 159], split * (.64+.31*Math.sin(Math.PI*h)));
+    layer(rgb, [115, 172, 181], split * band(h,.56,.21,.10) * .54);
+    const bars = band(fract(u*14.5+.18*h), .5,.16,.08);
+    layer(rgb, [84, 92, 99], bars * band(u,.54,.095,.055) * .53);
+    layer(rgb, [238, 162, 68], (1-split) * band(h,.53,.26,.11) * .58);
+  },
+  platy(rgb, u, h, phase) {
+    // A sunset platy fades from tangerine near the head to vermilion at the tail.
+    const tail = 1-smooth(.13,.80,u+.06*Math.sin(5*h+phase*.24));
+    layer(rgb, [201, 73, 47], tail * (.58+.25*Math.sin(Math.PI*h)));
+    layer(rgb, [241, 171, 78], smooth(.4,.77,u) * band(h,.63,.21,.13) * .67);
+  },
+};
 
 function noiseCorner(x, y, seed) {
   let bits = Math.imul(x + 19, 73856093) ^ Math.imul(y + 7, 19349663) ^ Math.imul(seed + 13, 83492791);
@@ -144,10 +254,13 @@ function writeRGBA(pixels, index, rgb, alpha = 255) {
 }
 
 function paintBody(species, variant, marks) {
-  const width = 256, height = 128;
+  // A discus flank spans almost as many screen pixels vertically as horizontally.
+  const width = species === 'discus' ? 512 : 256, height = width / 2;
   const color = new Uint8ClampedArray(width * height * 4);
   const relief = new Uint8ClampedArray(color.length);
   const pigment = palettes[species];
+  const paintFlank = flankPatterns[species] ?? ((rgb,u,h,phase,marks) => fishPigment(rgb,species,u,h,phase,marks));
+  const scaleRows = species === 'discus' ? 46 : species === 'angelfish' ? 38 : 24;
   const phase = variant * 1.37;
   const rgb = [0, 0, 0];
   for (let y = 0; y < height; y++) {
@@ -162,7 +275,7 @@ function paintBody(species, variant, marks) {
       const sheen = pigmentNoise(u * 15, h * 7, variant + 31);
       rgb[0] = pigment.belly[0]; rgb[1] = pigment.belly[1]; rgb[2] = pigment.belly[2];
       layer(rgb, pigment.side, midTone); layer(rgb, pigment.back, backTone);
-      fishPigment(rgb, species, u + sheen * .025 + flecks * .007, h + dapple * .030 + flecks * .007, phase, marks);
+      paintFlank(rgb, u + sheen * .025 + flecks * .007, h + dapple * .030 + flecks * .007, phase, marks);
 
       // Cool/warm flecks sit below the scales. The edge of the gill cover has
       // subtle pink perfusion; the top of the shoulder reflects cooler blues.
@@ -177,7 +290,7 @@ function paintBody(species, variant, marks) {
 
       // Staggered arcs read as overlapping scales under grazing light. A single packed
       // linear texture carries height in red for bumpMap and roughness in green.
-      const row = v * (species === 'angelfish' ? 38 : 24) + .32 * dapple + .30 * sheen + .16 * Math.sin(u * 7.5);
+      const row = v * scaleRows + .32 * dapple + .30 * sheen + .16 * Math.sin(u * 7.5);
       const rowOffset = Math.floor(row) % 2 * .5;
       const scaleY = fract(row) * 2 - 1;
       const scaleX = u * (species === 'zebra' ? 40 : 31) + rowOffset + sheen * .59 + flecks * .18;
@@ -209,12 +322,104 @@ function paintBody(species, variant, marks) {
   };
 }
 
+// Row order matches the UVs of the merged fin mesh. The caudal fin has a
+// separate map because its rays spread into a fan. Return the membrane opacity.
+const finRows = ['dorsal', 'anal', 'pectoral', 'pelvic'];
+const finPatterns = {
+  discus(rgb, part, u, v, grain, phase) {
+    if (part === 'pectoral') return .29;
+    if (part === 'pelvic') {
+      layer(rgb,[173,75,52],.78); layer(rgb,[126,190,174],smooth(.66,.98,u)*.76);
+      return .73;
+    }
+    if (part === 'tail') {
+      layer(rgb,[187,114,77],.63);
+      layer(rgb,[111,165,151],band(u,.68+.06*Math.sin(9*v),.045,.025)*.64);
+      return .54;
+    }
+    const path = v*9.5 + .58*Math.sin(8*u + v*9 + phase*.28) + .20*Math.sin(11*v - 9*u);
+    layer(rgb,[169,77,56],.90);
+    layer(rgb,[102,196,179],band(fract(path),.5,.17,.065)*(.65+.23*u));
+    layer(rgb,[48,69,72],smooth(.90,.99,u)*.83);
+    return .83;
+  },
+  cardinal(rgb, part, u) {
+    layer(rgb,[156,183,180],.55);
+    if (part === 'tail' || part === 'anal') layer(rgb,[188,111,100],(1-smooth(.05,.63,u))*.42);
+    return .32;
+  },
+  rummynose(rgb, part, u, v, grain) {
+    if (part !== 'tail') { layer(rgb,[195,204,197],.70); return .30; }
+    const fan = Math.abs(2*v-1);
+    const middle = 1-smooth(.14,.26,fan);
+    const lobes = band(fan,.61+.12*u+.035*grain,.15,.045)*smooth(.24,.65,u);
+    layer(rgb,[232,233,215],.98);
+    layer(rgb,[26,34,36],Math.max(middle,lobes)*.99);
+    return .91;
+  },
+  blackneon(rgb, part, u) {
+    layer(rgb,[178,188,165],.65);
+    if (part === 'tail') layer(rgb,[74,86,85],(1-smooth(.02,.30,u))*.36);
+    return .34;
+  },
+  cherrybarb(rgb, part, u, v) {
+    const t = part === 'pectoral' ? .34 : .82;
+    layer(rgb,[190,78,55],t*(.68+.31*u));
+    layer(rgb,[218,132,80],t*band(v,.5,.25,.15)*.28);
+    return .35+.34*t;
+  },
+  tigerbarb(rgb, part, u, v) {
+    if (part === 'pectoral') { layer(rgb,[206,170,107],.46); return .35; }
+    if (part === 'dorsal' || part === 'anal') {
+      layer(rgb,[45,49,43],.86);
+      layer(rgb,[221,108,48],smooth(.51,.72,u+.11*v)*.95);
+      return .76;
+    }
+    layer(rgb,[219,116,51],(.54+.36*Math.abs(v*2-1))*(.6+.4*u));
+    return .62;
+  },
+  galaxy(rgb, part, u, v) {
+    if (part === 'pectoral') { layer(rgb,[162,168,149],.60); return .32; }
+    layer(rgb,[56,67,70],.91);
+    const stripe = part === 'tail'
+      ? band(Math.abs(2*v-1),.57+.15*(1-u),.21,.057)
+      : band(u,.64+.06*Math.sin(v*3),.17,.055);
+    layer(rgb,[212,100,63],stripe*.98);
+    layer(rgb,[219,166,115],smooth(.92,.99,u)*.65);
+    return .75;
+  },
+  blackskirt(rgb, part, u, v) {
+    if (part === 'tail' || part === 'pectoral') { layer(rgb,[184,192,183],.72); return .37; }
+    layer(rgb,[49,58,61],.74+.22*(1-u));
+    layer(rgb,[119,128,124],smooth(.57,.99,u)*v*.53);
+    return part === 'anal' ? .85 : .70;
+  },
+  boesemani(rgb, part, u, v) {
+    if (part === 'pectoral') { layer(rgb,[179,186,156],.70); return .34; }
+    layer(rgb,[219,160,84],.80);
+    layer(rgb,[186,108,56],smooth(.74,.98,u)*.72);
+    layer(rgb,[234,200,114],band(v,.50,.32,.16)*.34);
+    return .62;
+  },
+  platy(rgb, part, u, v) {
+    layer(rgb,[218,117,62],part === 'pectoral' ? .42 : .79);
+    layer(rgb,[237,166,86],(1-smooth(.22,.9,u)) * band(v,.5,.30,.14)*.48);
+    return part === 'pectoral' ? .33 : .62;
+  },
+};
+
+export function hasFinAtlas(species) {
+  return Object.hasOwn(finPatterns, species);
+}
+
 function paintFin(species, variant, isTail, spotsOnFin) {
-  const width = 128, height = 96;
+  const paintMembrane = finPatterns[species];
+  const width = 128, rowHeight = 96, height = rowHeight * (paintMembrane && !isTail ? finRows.length : 1);
   const pixels = new Uint8ClampedArray(width * height * 4);
   const rgb = [0, 0, 0];
   for (let y = 0; y < height; y++) {
-    const v = (y + .5) / height;
+    const v = (y % rowHeight + .5) / rowHeight;
+    const part = isTail ? 'tail' : finRows[Math.floor(y / rowHeight)];
     const fan = Math.abs(v * 2 - 1);
     for (let x = 0; x < width; x++) {
       const u = (x + .5) / width;
@@ -228,7 +433,9 @@ function paintFin(species, variant, isTail, spotsOnFin) {
       const finRay = Math.max(ray, branch * smooth(.35, .75, u) * .68);
       let opacity = .36 + .25 * (1 - u) + .29 * finRay;
       rgb[0] = 164; rgb[1] = 173; rgb[2] = 156;
-      if (species === 'guppy') {
+      if (paintMembrane) {
+        opacity = paintMembrane(rgb, part, u, v, blotch, variant*1.37) + .15*finRay;
+      } else if (species === 'guppy') {
         layer(rgb, guppyPigments[variant], (isTail ? .94 : .62) * (.68 + .32 * u));
         const patch = spotCoverage(u + blotch * .11 + fray * .025, v - blotch * .05 + fray * .04, spotsOnFin);
         layer(rgb, [37, 57, 59], patch * (isTail ? .86 : .59) * (.93 + .14 * blotch));
@@ -267,8 +474,8 @@ function createPattern(species, variant) {
   return { ...body, tail: paintFin(species, variant, true, tailSpots), fin: paintFin(species, variant, false, tailSpots) };
 }
 
-// Textures are shared per species and pattern (at most 20 live sets), while each
-// model has its own disposable materials. Losing the last reference frees GPU maps.
+// Fish of the same species and variant share maps, while each model owns its
+// materials. Losing the last reference frees the GPU textures.
 export function createFishMaterials(species, seed = 0) {
   if (!Object.hasOwn(palettes, species)) species = 'neon';
   const variant = Math.min(variants - 1, Math.floor(clamp(Number.isFinite(seed) ? seed : 0) * variants));
@@ -282,7 +489,7 @@ export function createFishMaterials(species, seed = 0) {
   const body = new THREE.MeshPhysicalMaterial({
     map: maps.color, bumpMap: maps.relief, bumpScale: .003,
     roughnessMap: maps.relief, roughness: .8, metalness: .19,
-    iridescence: species === 'neon' ? .32 : .16, iridescenceIOR: 1.35,
+    iridescence: ['neon','cardinal','blackneon','boesemani'].includes(species) ? .32 : .16, iridescenceIOR: 1.35,
     iridescenceThicknessMinimum: 160, iridescenceThicknessMaximum: 290,
     clearcoat: .16, clearcoatRoughness: .44,
   });

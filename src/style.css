@@ -41,6 +41,16 @@
 .resident-dot.angelfish { background: #bdb6a5; }
 .resident-dot.zebra { background: #86a5be; }
 .resident-dot.harlequin { background: #c79469; }
+.resident-dot.discus { background: #e2846c; }
+.resident-dot.cardinal { background: #54bfd9; }
+.resident-dot.rummynose { background: #ed776b; }
+.resident-dot.blackneon { background: #b6c898; }
+.resident-dot.cherrybarb { background: #ce6056; }
+.resident-dot.tigerbarb { background: #e0a352; }
+.resident-dot.galaxy { background: #9eacc3; }
+.resident-dot.blackskirt { background: #8d929a; }
+.resident-dot.boesemani { background: #80b7b9; }
+.resident-dot.platy { background: #f08f50; }
 
 .scenery-list { border-top: 1px solid #b2ceb421; }
 .scenery-row { border-bottom: 1px solid #b2ceb421; }

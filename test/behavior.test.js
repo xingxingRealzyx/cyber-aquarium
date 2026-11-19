@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { addAnimal, createInitialState, restoreState, feed, consumePellet, changeWater, advanceSimulation, MAX_FOOD_PELLETS, substrateHeight } from '../src/simulation.js';
 import { advanceBehavior } from '../src/behavior.js';
+import { residentSkinBounds } from '../src/resident-collisions.js';
 
 const sumFood = state => state.foodPellets.reduce((sum,p)=>sum+p.mass,0);
 const nearly = (a,b,tolerance=1e-10) => assert.ok(Math.abs(a-b)<tolerance,`${a} != ${b}`);
@@ -26,8 +27,11 @@ test('fish, shrimp and snails trace bounded arcs when food is behind them near g
       const bottom = species === 'shrimp' || species === 'snail';
       a.seed = .4;
       a.hunger = 90;
-      a.position = { x: 3.61, y: bottom ? substrateHeight(3.61, 0) + .025 : 2.5, z: 0 };
       a.velocity = { x: bottom ? .075 : 1.7, y: 0, z: 0 };
+      a.position = { x: 0, y: 2.5, z: 0 };
+      // Start near glass with both the snout (or antennae) and the first outward stride inside.
+      const x = Math.min(3.61, 3.98 - residentSkinBounds(a).max.x - .07);
+      a.position = { x, y: bottom ? substrateHeight(x, 0) + .025 : 2.5, z: 0 };
       tank.food = .0015;
       tank.foodPellets = [{
         id: 'behind', x: 2.55, y: bottom ? substrateHeight(2.55, 0) + .04 : 2.5,

@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import stoneScans from './hardscape-assets/stone-shapes.json';
-import branchScans from './hardscape-assets/branch-shapes.json';
+import stoneScans from './hardscape-assets/stone-shapes.json' with { type: 'json' };
+import branchScans from './hardscape-assets/branch-shapes.json' with { type: 'json' };
 import { substrateHeight } from './simulation.js';
+import { scanSolids } from './scene-collisions.js';
 
 // The meshes and the colour, OpenGL normal and roughness maps are adapted from
 // Rock Moss Set 02 by Kless Gyzen and Dry Branches Medium 01 by Rico Cilliers (CC0).
@@ -145,17 +146,19 @@ export function createHardscape(manager) {
     mesh.receiveShadow = true;
     mesh.visible = false;
     group.add(mesh);
-    return { mesh, kind, geometryFor, signature: '', bounds: [] };
+    return { mesh, kind, geometryFor, signature: '', bounds: [], solids: [] };
   });
 
-  let revision = 0;
+  let revision = 0, solids = [];
   function update(items) {
+    const before = revision;
     for (const batch of batches) {
       const slots = items.filter(item => item.kind === batch.kind).map(item => item.slot);
       const signature = slots.join(',');
       if (signature === batch.signature) continue;
       revision++;
       const pieces = slots.map(batch.geometryFor);
+      batch.solids = pieces.flatMap(piece => scanSolids(piece,batch.kind === 'wood'));
       batch.bounds = pieces.map(piece => {
         piece.computeBoundingBox();
         return piece.boundingBox;
@@ -167,6 +170,7 @@ export function createHardscape(manager) {
       batch.mesh.visible = pieces.length > 0;
       batch.signature = signature;
     }
+    if (revision !== before) solids = batches.flatMap(batch => batch.solids);
   }
   // The broad return current travels over the rocks and branches. Ease its
   // lower edge upwards before the drifting figure reaches a piece of scenery.
@@ -183,5 +187,5 @@ export function createHardscape(manager) {
     }
     return floor;
   }
-  return { group, update, driftFloor, get revision() { return revision; } };
+  return { group, update, driftFloor, get revision() { return revision; }, get solids() { return solids; } };
 }

@@ -8,6 +8,16 @@ export const REPRODUCTION = Object.freeze({
   zebra:    { kind: 'scatter',    label: '散卵', hours: 4,  young: 3, cooldown: 24 },
   harlequin:{ kind: 'leaf',       label: '叶背附卵', hours: 6, young: 2, cooldown: 28 },
   angelfish:{ kind: 'guarded',    label: '守护卵床', hours: 8, young: 2, cooldown: 36 },
+  discus:   { kind: 'guarded',    label: '双亲护卵', hours: 10, young: 2, cooldown: 40 },
+  cardinal: { kind: 'scatter',    label: '散卵', hours: 5, young: 2, cooldown: 26 },
+  rummynose:{ kind: 'scatter',    label: '散卵', hours: 6, young: 2, cooldown: 26 },
+  blackneon:{ kind: 'scatter',    label: '散卵', hours: 5, young: 2, cooldown: 24 },
+  cherrybarb:{ kind: 'plant',     label: '水草黏卵', hours: 5, young: 2, cooldown: 26 },
+  tigerbarb:{ kind: 'scatter',    label: '散卵', hours: 5, young: 3, cooldown: 26 },
+  galaxy:   { kind: 'scatter',    label: '散卵', hours: 5, young: 2, cooldown: 24 },
+  blackskirt:{ kind: 'scatter',   label: '散卵', hours: 5, young: 3, cooldown: 28 },
+  boesemani:{ kind: 'plant',      label: '水草黏卵', hours: 9, young: 2, cooldown: 24 },
+  platy:    { kind: 'livebearer', label: '怀胎', hours: 9, young: 3, cooldown: 30 },
   shrimp:   { kind: 'carried',    label: '腹部抱卵', hours: 9, young: 3, cooldown: 28 },
   snail:    { kind: 'capsule',    label: '硬面卵囊', hours: 12, young: 1, cooldown: 36 },
 });
@@ -36,16 +46,17 @@ export function removeAttachedBroods(state, id) {
 
 function spawningSite(state, mother, kind, substrateHeight) {
   const { x, y, z } = mother.position;
-  if (kind === 'leaf' || kind === 'guarded') {
-    let foliage = state.plants.filter(p => p.species === 'anubias');
-    if (!foliage.length) foliage = state.plants.filter(p => p.species === 'vallisneria');
-    if (foliage.length) {
+  if (kind === 'leaf' || kind === 'guarded' || kind === 'plant') {
+    const preference = kind === 'plant' ? ['moss', 'vallisneria', 'anubias'] : ['anubias', 'vallisneria'];
+    for (const species of preference) {
+      const foliage = state.plants.filter(p => p.species === species);
+      if (!foliage.length) continue;
       const plant = foliage[mother.serial % foliage.length];
       const bed = plantBed(plant);
-      const height = plant.species === 'anubias' ? .55 : .9;
+      const height = { moss: .23, anubias: .55, vallisneria: .9 }[species];
       return { plantId: plant.id, position: { ...bed, y: substrateHeight(bed.x, bed.z) + height } };
     }
-    if (kind === 'leaf') return null;
+    if (kind !== 'guarded') return null;
   }
   if (kind === 'capsule' || kind === 'guarded') {
     return { position: { x, y: Math.max(.6, Math.min(2.2, y)), z: z < 0 ? -1.96 : 1.96 } };
@@ -62,7 +73,7 @@ function findPair(state, hour, model) {
     if (!a.alive || a.infection || a.health < 70 || a.hunger >= 75 ||
         a.nextBreedHours > hour || activeParents.has(a.id) || model.stage(a) !== 'adult') return false;
     const { temperature, ph } = model.species[a.species];
-    return w.temperature >= temperature[0] && w.temperature <= temperature[1] && w.ph >= ph[0] && w.ph <= ph[1];
+    return model.waterInRange(w, 'temperature', temperature) && model.waterInRange(w, 'ph', ph);
   });
   // Rotate who gets first choice instead of giving the first resident every free place.
   const females = ready.filter(a => a.sex === 'female');
@@ -133,8 +144,8 @@ export function restoreBroods(state, saved) {
     const position = b.position;
     if (!position || ![position.x, position.y, position.z].every(Number.isFinite) ||
         Math.abs(position.x) > 4 || position.y < 0 || position.y > 4.2 || Math.abs(position.z) > 2) continue;
-    if ((profile.kind === 'leaf' || b.plantId != null) &&
-        (!validId(b.plantId) || !state.plants.some(p => p.id === b.plantId && p.species !== 'moss'))) continue;
+    if ((profile.kind === 'leaf' || profile.kind === 'plant' || b.plantId != null) &&
+        (!validId(b.plantId) || !state.plants.some(p => p.id === b.plantId && (profile.kind === 'plant' || p.species !== 'moss')))) continue;
     const count = Math.min(b.count, slots, profile.young);
     state.broods.push({
       id: b.id, species: b.species, motherId: b.motherId, fatherId: b.fatherId, count,

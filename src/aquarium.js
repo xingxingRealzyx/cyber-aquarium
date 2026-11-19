@@ -5,6 +5,7 @@ import { corpseDecay, MAX_FOOD_PELLETS, substrateHeight as sandHeight } from './
 import { createSubstrate } from './substrate.js';
 import { createTankBase } from './tank-base.js';
 import { createHardscape } from './hardscape.js';
+import { createSceneCollisions, scanSolids } from './scene-collisions.js';
 import { createFishModel as fishModel, animateFish } from './fish-model.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -194,6 +195,15 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   tube([[3.55,3.1,-1.62],[3.55,2.4,-1.62],[3.55,1.02,-1.62]],.055,filterMat,filterGroup);
   for(let i=0;i<7;i++)mesh(new THREE.TorusGeometry(.066,.012,5,12),filterMat,filterGroup,[3.55,1.05+i*.055,-1.62]).rotation.x=Math.PI/2;
 
+  filterGroup.updateWorldMatrix(true,true);
+  const filterSolids = filterGroup.children.flatMap(part => {
+    const geometry = part.geometry.clone().applyMatrix4(part.matrixWorld);
+    const shapes = scanSolids(geometry, part.geometry.type === 'TubeGeometry');
+    geometry.dispose();
+    return shapes;
+  });
+  const collisions = createSceneCollisions(filterSolids);
+
   let plantsSignature=null;
   let plantsGroup=null;
   function rebuildPlants(plants) {
@@ -345,6 +355,60 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   }
   const resizeObserver=new ResizeObserver(resize);resizeObserver.observe(container);resize();
   let lastLight=true;
+  function syncScenery(state,behaviorClock,flowClock) {
+    hardscape.update(state.hardscape || []);
+    const plants = state.plants ?? [];
+    const signature = plants.map(p => `${p.id}:${p.seed}:${p.species}:${p.slot}:${Math.round((p.biomass ?? 1) * 4)}`).join('|');
+    if (signature !== plantsSignature) {
+      rebuildPlants(plants);
+      plantsSignature = signature;
+    }
+    const placedToys=state.toys || [];
+    for(const [id,model] of toys){
+      if(placedToys.some(toy=>toy.id===id))continue;
+      tank.remove(model);disposeObject(model);toys.delete(id);
+    }
+    for(const toy of placedToys){
+      let model=toys.get(toy.id);
+      if(!model){
+        if (toy.kind === 'author') {
+          const swimmer = createAuthorSwimmer(sceneryLoader);
+          model = createAuthorDisplay(swimmer, animateAuthorSwimmer, toy.slot, WATER_LEVEL, hardscape.driftFloor);
+        } else {
+          model=createToyModel(toy.kind, toy.color, sceneryLoader);
+        }
+        model.userData.toyKind=toy.kind;
+        tank.add(model);toys.set(toy.id,model);
+      }
+      const clock = model.userData.author ? behaviorClock : flowClock;
+      if (model.userData.poseClock != null && Math.abs(model.userData.poseClock-clock)<1e-8 &&
+          model.userData.poseRevision===hardscape.revision) continue;
+      if (model.userData.author) {
+        const age = Math.max(0, behaviorClock - (toy.placedAtSeconds ?? 0));
+        model.userData.author.update(age, hardscape.revision);
+      } else {
+        poseToy(model,toy,flowClock,WATER_LEVEL,hardscape.driftFloor);
+      }
+      model.userData.poseClock=clock;
+      model.userData.poseRevision=hardscape.revision;
+    }
+  }
+
+  function prepareCollisions(state,deltaSeconds) {
+    const dt=state.paused ? 0 : deltaSeconds;
+    const start=state.behaviorSeconds ?? 0, flowStart=state.currentSeconds ?? start;
+    const flow=(state.equipment?.filter!==false ? .78 : 0)+(state.equipment?.aerator!==false ? .22 : 0);
+    // Capture the start pose on placement and on a restored tank, too. The
+    // solver sees both ends of this frame's stroke until rendering catches up.
+    syncScenery(state,start,flowStart);
+    collisions.update(hardscape.solids,toys.values(),false,plantsGroup.userData.plantContacts);
+    if (dt>0) {
+      syncScenery(state,start+dt,flowStart+dt*flow);
+      collisions.update(hardscape.solids,toys.values(),true,plantsGroup.userData.plantContacts);
+    }
+    return collisions;
+  }
+
   function update(state,deltaSeconds,elapsedSeconds,motionDt=deltaSeconds){
     const t=Number.isFinite(elapsedSeconds)?elapsedSeconds:time.value+Math.max(0,deltaSeconds);
     time.value=t;
@@ -364,33 +428,7 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     waterTintMat.opacity=.022+(1-clarity)*.21;
     waterTintMat.color.set(clarity>.5?'#6ca781':'#8c9958');
     particleMat.opacity=.15+(1-clarity)*.36;
-    hardscape.update(state.hardscape || []);
-    const placedToys=state.toys || [];
-    for(const [id,model] of toys){
-      if(placedToys.some(toy=>toy.id===id))continue;
-      tank.remove(model);disposeObject(model);toys.delete(id);
-    }
-    for(const toy of placedToys){
-      let model=toys.get(toy.id);
-      if(!model){
-        if (toy.kind === 'author') {
-          const swimmer = createAuthorSwimmer(sceneryLoader);
-          model = createAuthorDisplay(swimmer, animateAuthorSwimmer, toy.slot, WATER_LEVEL, hardscape.driftFloor);
-        } else {
-          model=createToyModel(toy.kind, toy.color, sceneryLoader);
-        }
-        model.userData.toyKind=toy.kind;
-        tank.add(model);toys.set(toy.id,model);
-      }
-      if (model.userData.author) {
-        const age = Math.max(0, (state.behaviorSeconds ?? 0) - (toy.placedAtSeconds ?? 0));
-        model.userData.author.update(age, hardscape.revision);
-      } else {
-        poseToy(model,toy,waterClock.value,WATER_LEVEL,hardscape.driftFloor);
-      }
-    }
-    const signature=(state.plants||[]).map(p=>`${p.id}:${p.species}:${p.slot}:${Math.round((p.biomass??1)*4)}`).join('|');
-    if(signature!==plantsSignature){plantsSignature=signature;rebuildPlants(state.plants||[]);}
+    syncScenery(state, state.behaviorSeconds ?? 0, waterClock.value);
     const currentIds=new Set();
     for(const animal of state.animals||[]){
       currentIds.add(animal.id);
@@ -498,5 +536,5 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     broodDisplay.dispose();
     disposeObject(scene);waterLight.dispose();keyLight.shadow.dispose();environment.dispose();renderer.dispose();renderer.domElement.remove();
   }
-  return {update,resize,resetView,setDesktopLayout:desktopView.setLayout,setAutoRotate:(value)=>{controls.autoRotate=Boolean(value);},setQuality,dispose,renderer,camera,controls,hitTest,setSelectedAnimal,getAnimalScreenPositions,getBroodScreenPositions,getToyScreenPositions};
+  return {update,prepareCollisions,resize,resetView,setDesktopLayout:desktopView.setLayout,setAutoRotate:(value)=>{controls.autoRotate=Boolean(value);},setQuality,dispose,renderer,camera,controls,hitTest,setSelectedAnimal,getAnimalScreenPositions,getBroodScreenPositions,getToyScreenPositions};
 }

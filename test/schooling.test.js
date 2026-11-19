@@ -1,0 +1,142 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { advanceBehavior } from '../src/behavior.js';
+import { createInitialState, SPECIES } from '../src/simulation.js';
+
+function pair(species = 'neon') {
+  const tank = createInitialState();
+  const [focal, neighbour] = tank.animals;
+  tank.animals = [focal, neighbour];
+  for (const [i, a] of tank.animals.entries()) {
+    Object.assign(a, {
+      id: 'fish-' + i, species: i === 0 ? 'neon' : species, serial: i + 1,
+      hunger: 30 - i, health: 100, size: .8, seed: .15, metabolism: 1,
+      position: { x: -.75 + i * .8, y: 2.4, z: 0 }, velocity: { x: .5, y: 0, z: 0 },
+    });
+  }
+  return tank;
+}
+
+test('a tetra steers with the heading of a nearby tetra', () => {
+  const tank = pair(), opposite = structuredClone(tank);
+  // The neighbour occupies exactly the same spot in both runs. Only its heading differs.
+  tank.animals[1].velocity = { x: 0, y: 0, z: .5 };
+  opposite.animals[1].velocity = { x: 0, y: 0, z: -.5 };
+  advanceBehavior(tank, 1 / 30);
+  advanceBehavior(opposite, 1 / 30);
+  assert.ok(tank.animals[0].velocity.z > opposite.animals[0].velocity.z + .001,
+    'the focal fish responds before the neighbours have travelled apart');
+});
+
+test('every stockable fish species schools with a peer and flees an approaching diver', () => {
+  for (const [species, profile] of Object.entries(SPECIES)) {
+    if (profile.type !== 'fish') continue;
+    const tank = pair(species);
+    tank.animals[0].species = species;
+    advanceBehavior(tank, 1 / 30);
+    assert.ok(tank.animals.every(a => a.behavior === 'schooling'), species);
+    const scene = { avoid: () => ({ author: { x: 1, y: 0, z: 0, distance: .25 } }) };
+    advanceBehavior(tank, .6, scene);
+    for (const a of tank.animals) {
+      assert.equal(a.behavior, 'evading', species);
+      assert.ok(a.velocity.x > .8, species);
+    }
+  }
+});
+
+test('a cruising tetra closes the gap to its own kind and ignores a distant or unrelated fish', () => {
+  function displacement(species, distance) {
+    const initial = pair(species);
+    function followAt(z) {
+      const tank = structuredClone(initial), peer = tank.animals[1];
+      // Keep the peer on a parallel course so matching its heading alone cannot close the gap.
+      for (let frame = 0; frame < 30; frame++) {
+        peer.position = { x: -.6 + .5 * frame / 30, y: 2.4, z };
+        peer.velocity = { x: .5, y: 0, z: 0 };
+        advanceBehavior(tank, 1 / 30);
+      }
+      return tank.animals[0].position.z;
+    }
+    return followAt(distance) - followAt(-distance);
+  }
+  assert.ok(displacement('neon', 1) > .025, 'moves towards the nearby schoolmate');
+  assert.ok(Math.abs(displacement('guppy', 1)) < 1e-8, 'does not school with a guppy');
+  const alone = pair(), far = structuredClone(alone);
+  alone.animals.length = 1;
+  far.animals[1].position = { x: 3, y: 3.5, z: -1.5 };
+  advanceBehavior(alone, .5);
+  advanceBehavior(far, .5);
+  assert.deepEqual(far.animals[0].position, alone.animals[0].position);
+});
+
+test('tightly spaced fish open a gap even when swimming in the same direction', () => {
+  for (const species of ['neon', 'guppy']) {
+    const tank = pair(species);
+    const [first, second] = tank.animals;
+    first.position.z = -.08;
+    second.position = { ...first.position, z: .08 };
+    advanceBehavior(tank, .9);
+    assert.ok(second.position.z - first.position.z > .2, species + ' pair should separate');
+  }
+});
+
+test('a hungry tetra can turn away from a nearby group to reach food', () => {
+  const tank = pair();
+  const [hungry, neighbour] = tank.animals;
+  hungry.hunger = 85;
+  neighbour.hunger = 2;
+  const other = structuredClone(neighbour);
+  Object.assign(other, { id: 'third', serial: 3 });
+  other.position.z += .6;
+  tank.animals.push(other);
+  tank.food = .0015;
+  tank.foodPellets = [{ id: 'pellet', x: -1.8, y: 2.9, z: -.4, seed: .4, ageSeconds: 0, mass: tank.food }];
+  advanceBehavior(tank, .1);
+  assert.equal(hungry.targetFoodId, 'pellet');
+  advanceBehavior(tank, 7);
+  assert.ok(hungry.bites > 0);
+  assert.equal(neighbour.bites + other.bites, 0);
+});
+
+test('a nearby author interrupts pursuit, accelerates the fish away and then releases it to feed', () => {
+  const tank = pair();
+  const fish = tank.animals[0];
+  tank.animals = [fish];
+  fish.hunger = 75;
+  tank.food = .001;
+  tank.foodPellets = [{id:'behind', x:-1.7, y:2.6, z:0, seed:.2, mass:.001, ageSeconds:0}];
+  const origin = fish.position.x;
+  const scene = {
+    avoid: () => ({author:{x:1, y:0, z:0, distance:.3}}),
+    blocksFood: () => false,
+  };
+  advanceBehavior(tank, .6, scene);
+  assert.equal(fish.behavior, 'evading');
+  assert.equal(fish.targetFoodId, null);
+  assert.ok(fish.velocity.x > 1 && fish.position.x > origin + .5);
+  scene.avoid = () => ({author:null});
+  advanceBehavior(tank, 1 / 30, scene);
+  assert.equal(fish.behavior, 'seeking');
+  assert.equal(fish.targetFoodId, 'behind');
+});
+
+test('a fish bends its path less for a leaf than a solid and can still reach food among leaves', () => {
+  const initial = pair();
+  initial.animals.length = 1;
+  initial.animals[0].hunger = 80;
+  initial.food = .001;
+  initial.foodPellets = [{ id: 'pellet', x: .8, y: 2.4, z: 0, mass: initial.food, seed: .2, ageSeconds: 0 }];
+  const surface = { x: 0, y: 0, z: 1, distance: .01 };
+  function approach(nearby) {
+    const tank = structuredClone(initial);
+    const scene = { avoid: () => nearby, blocksFood: () => false };
+    advanceBehavior(tank, .5, scene);
+    const offset = tank.animals[0].position.z;
+    advanceBehavior(tank, 2, scene);
+    return { offset, bites: tank.animals[0].bites };
+  }
+  const open = approach({}), leaves = approach({ foliage: surface }), solid = approach({ obstacle: surface });
+  assert.ok(leaves.offset > open.offset + .01);
+  assert.ok(solid.offset > leaves.offset + .1);
+  assert.ok(leaves.bites > 0);
+});

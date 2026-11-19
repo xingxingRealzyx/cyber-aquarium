@@ -11,14 +11,16 @@ tank.plants = [];
 tank.paused = true;
 addToy(tank, 'author');
 tank.behaviorSeconds = 18;
-for (const [species, z] of [['neon', 0], ['shrimp', 1], ['snail', -.7]]) {
+// Start the feeding trial outside the author's flight radius and place the
+// bottom pellets in the clear sand in front of and behind the driftwood.
+for (const [species, x, z] of [['neon', 2.85, 1.2], ['shrimp', 1.25, 1.25], ['snail', 2, -.7]]) {
   const a = addAnimal(tank, species).animal;
   Object.assign(a, {id:species, hunger:90, seed:.38, position:{
-    x:2, y:species === 'neon' ? 3.6 : substrateHeight(2,z) + .025, z,
+    x, y:species === 'neon' ? 2.9 : substrateHeight(x,z) + .025, z,
   }, velocity:{x:species === 'snail' ? -.07 : .23, y:0, z:species === 'snail' ? .0007 : 0}});
   if (species !== 'neon') {
-    const x = -1.8, bedZ = z - .34;
-    tank.foodPellets.push({id:species+'-food', x, y:substrateHeight(x,bedZ)+.04,
+    const bedX = 0, bedZ = z - .34;
+    tank.foodPellets.push({id:species+'-food', x:bedX, y:substrateHeight(bedX,bedZ)+.04,
       z:bedZ, mass:.02, seed:.31, ageSeconds:40});
   }
 }

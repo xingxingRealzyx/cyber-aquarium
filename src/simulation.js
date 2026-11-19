@@ -1,27 +1,78 @@
 import { INFECTIONS, createInfectionClock, restoreInfectionClock, restoreInfection, startScheduledInfection, advanceInfection } from './fish-health.js';
 import { advanceReproduction, availableAnimalSlots, MAX_ANIMALS, removeAttachedBroods, restoreBroods } from './reproduction.js';
+import { restorePlayBout } from './fish-play.js';
 
 export { INFECTIONS };
 export { availableAnimalSlots };
 
 /** Freshwater ecosystem model. Nitrogen concentrations are mg N/L, time is hours. */
 export const SPECIES = Object.freeze({
-  neon: { maturityDays: 1.25, lifespanDays: 7, name: '霓虹灯鱼', latin: 'Paracheirodon innesi', mass: 0.35, temperature: [21, 27], ph: [6, 7.8], sensitivity: 1.1, type: 'fish' },
-  guppy: { maturityDays: .75, lifespanDays: 4, name: '孔雀鱼', latin: 'Poecilia reticulata', mass: 0.65, temperature: [22, 28], ph: [6.8, 8.2], sensitivity: 0.9, type: 'fish' },
+  neon: { maturityDays: 1.25, lifespanDays: 7, name: '霓虹灯鱼', latin: 'Paracheirodon innesi', mass: 0.35, temperature: [21, 27], ph: [6, 7.8], sensitivity: 1.1, type: 'fish', schoolAffinity: .84 },
+  guppy: { maturityDays: .75, lifespanDays: 4, name: '孔雀鱼', latin: 'Poecilia reticulata', mass: 0.65, temperature: [22, 28], ph: [6.8, 8.2], sensitivity: 0.9, type: 'fish', schoolAffinity: .55 },
   angelfish: {
     maturityDays: 1.5, lifespanDays: 10, name: '神仙鱼', latin: 'Pterophyllum scalare', type: 'fish',
     mass: 1.25, temperature: [24, 29], ph: [6, 7.6], sensitivity: 1.05,
-    swim: { cruiseSpeed: 0.36, cruisingHeight: 1.65, pace: 0.68 },
+    swim: { cruiseSpeed: 0.36, cruisingHeight: 1.65, pace: 0.68 }, schoolAffinity: .42,
   },
   zebra: {
     maturityDays: 1, lifespanDays: 6, name: '斑马鱼', latin: 'Danio rerio', type: 'fish',
     mass: 0.42, temperature: [22, 28], ph: [6.5, 8], sensitivity: 0.95,
-    swim: { cruiseSpeed: 0.78, cruisingHeight: 2.30, pace: 1.50 },
+    swim: { cruiseSpeed: 0.78, cruisingHeight: 2.30, pace: 1.50 }, schoolAffinity: .80,
   },
   harlequin: {
     maturityDays: 1.25, lifespanDays: 7, name: '三角灯鱼', latin: 'Trigonostigma heteromorpha', type: 'fish',
     mass: 0.58, temperature: [23, 28], ph: [6, 7.5], sensitivity: 1.05,
-    swim: { cruiseSpeed: 0.58, cruisingHeight: 1.90, pace: 1.08 },
+    swim: { cruiseSpeed: 0.58, cruisingHeight: 1.90, pace: 1.08 }, schoolAffinity: .84,
+  },
+  discus: {
+    maturityDays: 1.5, lifespanDays: 10, name: '七彩神仙鱼', latin: 'Symphysodon aequifasciatus', type: 'fish',
+    mass: 1.50, temperature: [26, 30], ph: [5.8, 7.5], sensitivity: 1.2,
+    swim: { cruiseSpeed: .34, cruisingHeight: 1.55, pace: .65 }, schoolAffinity: .58,
+  },
+  cardinal: {
+    maturityDays: 1.25, lifespanDays: 7, name: '宝莲灯鱼', latin: 'Paracheirodon axelrodi', type: 'fish',
+    mass: .38, temperature: [24, 29], ph: [5.5, 7.3], sensitivity: 1.12,
+    swim: { cruiseSpeed: .53, cruisingHeight: 1.52, pace: 1.04 }, schoolAffinity: .88,
+  },
+  rummynose: {
+    maturityDays: 1.25, lifespanDays: 8, name: '红鼻剪刀鱼', latin: 'Petitella bleheri', type: 'fish',
+    mass: .48, temperature: [24, 28], ph: [5.5, 7.4], sensitivity: 1.18,
+    swim: { cruiseSpeed: .67, cruisingHeight: 1.72, pace: 1.24 }, schoolAffinity: .95,
+  },
+  blackneon: {
+    maturityDays: 1, lifespanDays: 7, name: '黑霓虹灯鱼', latin: 'Hyphessobrycon herbertaxelrodi', type: 'fish',
+    mass: .36, temperature: [23, 27], ph: [5.8, 7.5], sensitivity: 1.02,
+    swim: { cruiseSpeed: .51, cruisingHeight: 1.96, pace: 1.02 }, schoolAffinity: .83,
+  },
+  cherrybarb: {
+    maturityDays: 1.25, lifespanDays: 7, name: '樱桃鲃', latin: 'Rohanella titteya', type: 'fish',
+    mass: .52, temperature: [23, 27], ph: [6, 7.6], sensitivity: 1,
+    swim: { cruiseSpeed: .46, cruisingHeight: 1.34, pace: .88 }, schoolAffinity: .56,
+  },
+  tigerbarb: {
+    maturityDays: 1.25, lifespanDays: 7, name: '虎皮鱼', latin: 'Puntigrus tetrazona', type: 'fish',
+    mass: .80, temperature: [23, 28], ph: [6, 7.8], sensitivity: .98,
+    swim: { cruiseSpeed: .72, cruisingHeight: 1.83, pace: 1.38 }, schoolAffinity: .81,
+  },
+  galaxy: {
+    maturityDays: 1, lifespanDays: 5, name: '银河斑马鱼', latin: 'Danio margaritatus', type: 'fish',
+    mass: .24, temperature: [20, 26], ph: [6.5, 7.8], sensitivity: 1.08,
+    swim: { cruiseSpeed: .43, cruisingHeight: 1.35, pace: .91 }, schoolAffinity: .64,
+  },
+  blackskirt: {
+    maturityDays: 1.25, lifespanDays: 8, name: '黑裙鱼', latin: 'Gymnocorymbus ternetzi', type: 'fish',
+    mass: .76, temperature: [22, 27], ph: [6, 7.8], sensitivity: .97,
+    swim: { cruiseSpeed: .54, cruisingHeight: 1.92, pace: .98 }, schoolAffinity: .79,
+  },
+  boesemani: {
+    maturityDays: 1.5, lifespanDays: 9, name: '波氏彩虹鱼', latin: 'Melanotaenia boesemani', type: 'fish',
+    mass: 1.12, temperature: [24, 29], ph: [7, 8], sensitivity: 1.06,
+    swim: { cruiseSpeed: .70, cruisingHeight: 2.16, pace: 1.30 }, schoolAffinity: .83,
+  },
+  platy: {
+    maturityDays: .75, lifespanDays: 5, name: '月光鱼', latin: 'Xiphophorus maculatus', type: 'fish',
+    mass: .70, temperature: [21, 27], ph: [7, 8.2], sensitivity: .92,
+    swim: { cruiseSpeed: .45, cruisingHeight: 1.89, pace: .88 }, schoolAffinity: .48,
   },
   shrimp: { maturityDays: 1, name: '樱花虾', latin: 'Neocaridina davidi', mass: 0.15, temperature: [20, 27], ph: [6.5, 8], sensitivity: 1.25, type: 'invertebrate' },
   snail: { maturityDays: 1.5, name: '斑马螺', latin: 'Vittina natalensis', mass: 0.4, temperature: [22, 28], ph: [6.8, 8.2], sensitivity: 0.75, type: 'invertebrate' },
@@ -442,6 +493,25 @@ export function removeDead(state) {
   return { ok: true, count, message: count ? `已捞起 ${count} 只死亡生物` : '没有需要清理的死亡生物' };
 }
 
+export function residentWaterRange(state, parameter) {
+  let low = -Infinity, high = Infinity;
+  for (const animal of state.animals) {
+    if (!animal.alive) continue;
+    const [min, max] = SPECIES[animal.species][parameter];
+    low = Math.max(low, min);
+    high = Math.min(high, max);
+  }
+  if (!Number.isFinite(low)) return parameter === 'temperature' ? [21, 28] : [6.5, 8];
+  return [low, high];
+}
+
+// Compare at the gauge resolution so a heater approaching its set point can
+// satisfy two species whose tolerated ranges meet at that exact temperature.
+export function waterInRange(water, parameter, [low, high]) {
+  const measured = Number(water[parameter].toFixed(parameter === 'temperature' ? 1 : 2));
+  return measured >= low && measured <= high;
+}
+
 export function getAssessment(state) {
   const w = state.water;
   const nh3 = w.ammonia * ammoniaFraction(w.temperature, w.ph);
@@ -451,8 +521,8 @@ export function getAssessment(state) {
   if (w.oxygen < 5) return { level: 'warning', label: '溶氧偏低', message: '开启增氧，减少投喂和生物密度。' };
   if (w.ammonia > 0.15 || w.nitrite > 0.08 || nh3 > 0.01) return { level: 'warning', label: '氮循环承压', message: '减少投喂，确认过滤开启，必要时少量换水。' };
   if (w.nitrate > 15) return { level: 'warning', label: '需要换水', message: '硝酸盐正在积累；水草吸收有限，请定期换水。' };
-  if (w.temperature < 21 || w.temperature > 28) return { level: 'warning', label: '温度不适', message: '将水温维持在混养生物能共同适应的范围。' };
-  if (w.ph < 6.5 || w.ph > 8) return { level: 'warning', label: '酸碱度偏离', message: '检查水质与过滤，适量换水，避免剧烈调整。' };
+  if (!waterInRange(w, 'temperature', residentWaterRange(state, 'temperature'))) return { level: 'warning', label: '温度不适', message: '将水温维持在缸内生物能共同适应的范围。' };
+  if (!waterInRange(w, 'ph', residentWaterRange(state, 'ph'))) return { level: 'warning', label: '酸碱度偏离', message: '检查水质与过滤，适量换水，避免剧烈调整。' };
   const sick = state.animals.filter(a => a.alive && a.infection);
   if (sick.length) return { level: 'warning', label: '鱼儿感染', message: `${sick.length} 条鱼有感染症状，到生物面板查看个体并护理。` };
   if (state.animals.some(a => a.alive && a.health < 60)) return { level: 'warning', label: '生物虚弱', message: '水质恢复后健康会逐步恢复，检查饥饿与生物负载。' };
@@ -460,7 +530,7 @@ export function getAssessment(state) {
   return { level: 'good', label: '生态稳定', message: '过滤、溶氧和氮循环正常。少量投喂，保持观察。' };
 }
 
-const reproductionModel = { species: SPECIES, stage: animalLifeStage, spawn: spawnOffspring, record, substrateHeight };
+const reproductionModel = { species: SPECIES, stage: animalLifeStage, spawn: spawnOffspring, record, substrateHeight, waterInRange };
 
 function integrate(state, dt) {
   const w = state.water;
@@ -710,7 +780,8 @@ export function restoreState(raw) {
       restored.metabolism = numeric(a.metabolism,restored.metabolism,.65,1.5);
       for (const [axis,min,max] of [['x',-3.65,3.65],['y',.15,4.05],['z',-1.65,1.65]]) restored.position[axis] = numeric(a.position?.[axis],restored.position[axis],min,max);
       for (const axis of ['x','y','z']) restored.velocity[axis] = numeric(a.velocity?.[axis],restored.velocity[axis],-4,4);
-      restored.behavior = restored.alive && ['swimming','seeking','eating','resting','gasping','grazing'].includes(a.behavior) ? a.behavior : restored.alive ? restored.behavior : 'dead';
+      const behaviors = ['swimming','seeking','eating','resting','gasping','grazing','schooling','chasing','darting','evading'];
+      restored.behavior = restored.alive && behaviors.includes(a.behavior) ? a.behavior : restored.alive ? restored.behavior : 'dead';
       restored.lastMealHours = a.lastMealHours == null ? null : numeric(a.lastMealHours,null,0,base.elapsedHours);
       restored.totalEatenGrams = numeric(a.totalEatenGrams,0,0,1e4);
       restored.bites = Math.round(numeric(a.bites,0,0,1e9));
@@ -729,6 +800,8 @@ export function restoreState(raw) {
       return restored;
     });
   }
+  const play = restorePlayBout(data.playBout, base.animals, base.behaviorSeconds);
+  if (play) base.playBout = play;
   if (Array.isArray(data.plants)) {
     const usedIds = new Set();
     const slots = new Map(Object.keys(PLANTS).map(kind => [kind, new Set()]));

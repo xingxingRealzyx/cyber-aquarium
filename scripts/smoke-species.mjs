@@ -4,8 +4,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-const newSpecies = ['angelfish', 'zebra', 'harlequin'];
-const allSpecies = [...newSpecies, 'guppy', 'neon', 'shrimp', 'snail'].sort();
+const newSpecies = ['discus', 'cardinal', 'rummynose', 'blackneon', 'cherrybarb', 'tigerbarb', 'galaxy', 'blackskirt', 'boesemani', 'platy'];
+const allSpecies = [...newSpecies, 'angelfish', 'zebra', 'harlequin', 'guppy', 'neon', 'shrimp', 'snail'].sort();
 const candidates = [
   process.env.CHROMIUM_PATH,
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -41,11 +41,13 @@ try {
   assert.ok(previews.every(item => item.pixels > 0));
 
   const additions = [];
+  await page.locator('[data-stock-sex="female"]').click();
   for (const species of newSpecies) {
     await page.locator(`[data-add-animal="${species}"]`).click();
     const animals = await readAnimals();
     const added = animals.find(a => a.species === species && !stock.some(original => original.id === a.id));
     assert.ok(added?.alive, `${species} added to the tank`);
+    assert.equal(added.sex, 'female', `${species} respects the selected sex`);
     additions.push(added);
   }
   assert.equal((await readAnimals()).length, stock.length + additions.length);
@@ -60,6 +62,7 @@ try {
     assert.equal(fish.species, original.species);
     assert.equal(fish.seed, original.seed);
     assert.equal(fish.label, original.label);
+    assert.equal(fish.sex, original.sex);
   }
   await page.mouse.move(1, 1);
   await page.waitForFunction(() => +getComputedStyle(document.querySelector('.dock-wrap')).opacity < .01 && +getComputedStyle(document.querySelector('#hint')).opacity < .01);

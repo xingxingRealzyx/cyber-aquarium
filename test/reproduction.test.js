@@ -1,16 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Group, Texture, TextureLoader } from 'three';
 import {
   addAnimal, advanceSimulation, animalLifeStage, availableAnimalSlots, createInitialState, feed,
   removeAnimal, removePlant, restoreState, SPECIES,
 } from '../src/simulation.js';
 import { advanceBehavior } from '../src/behavior.js';
 import { REPRODUCTION } from '../src/reproduction.js';
+import { createAquaticPlants } from '../src/aquatic-plants.js';
+import { createBroodDisplay } from '../src/brood-model.js';
 
 function pairTank(species) {
   const s = createInitialState();
   s.animals = [];
   s.infectionClock.nextAtHours = 39;
+  const [min, max] = SPECIES[species].temperature;
+  s.water.temperature = s.equipment.targetTemperature = Math.min(max, Math.max(min, s.water.temperature));
   const mother = addAnimal(s, species, 'female').animal;
   const father = addAnimal(s, species, 'male').animal;
   for (const a of s.animals) {
@@ -32,6 +37,7 @@ for (const [species, profile] of Object.entries(REPRODUCTION)) {
     assert.equal(brood.count, profile.young);
     assert.equal(brood.dueAtHours - brood.startedAtHours, profile.hours);
     if (['leaf', 'guarded'].includes(profile.kind)) assert.ok(s.plants.some(p => p.id === brood.plantId));
+    if (profile.kind === 'plant') assert.ok(s.plants.some(p => p.id === brood.plantId && p.species === 'moss'));
     if (profile.kind === 'capsule') assert.equal(Math.abs(brood.position.z), 1.96);
     assert.ok(s.events.some(e => e.message.includes(profile.label)));
     advanceSimulation(s, profile.hours - .02);
@@ -94,14 +100,14 @@ test('matching stocking orders in different tanks still produce distinct offspri
 });
 
 test('attachment and parental loss have different consequences for eggs and carried young', () => {
-  for (const species of ['guppy', 'shrimp', 'neon', 'snail']) {
+  for (const species of ['guppy', 'platy', 'shrimp', 'neon', 'snail']) {
     const { s, mother, father } = pairTank(species);
     advanceSimulation(s, 2);
     const [brood] = s.broods;
     removeAnimal(s, father.id);
     assert.equal(s.broods.length, 1);
     removeAnimal(s, mother.id);
-    const isCarried = ['guppy', 'shrimp'].includes(species);
+    const isCarried = ['guppy', 'platy', 'shrimp'].includes(species);
     assert.equal(s.broods.length, isCarried ? 0 : 1);
     const resumed = restoreState(s);
     advanceSimulation(resumed, REPRODUCTION[species].hours);
@@ -116,24 +122,52 @@ test('attachment and parental loss have different consequences for eggs and carr
   assert.equal(s.broods.length, 0);
 });
 
-test('leaf spawning needs a leaf; removing it removes its eggs; angelfish can guard a glass clutch', () => {
-  const { s } = pairTank('harlequin');
+test('plant spawning needs foliage and removing it also removes the eggs', () => {
+  for (const species of ['harlequin', 'cherrybarb', 'boesemani']) {
+    const { s } = pairTank(species);
+    advanceSimulation(s, 2);
+    const [brood] = s.broods;
+    assert.equal(removePlant(s, brood.plantId).ok, true);
+    assert.equal(s.broods.length, 0);
+    s.plants = [];
+    for (const parent of s.animals) parent.nextBreedHours = 0;
+    advanceSimulation(s, 2);
+    assert.equal(s.broods.length, 0);
+  }
+});
+
+test('a restored rainbowfish brood is visible on an actual moss shoot until the plant is removed', t => {
+  t.mock.method(TextureLoader.prototype, 'load', () => new Texture());
+  const { s } = pairTank('boesemani');
+  s.plants = [s.plants.find(p => p.species === 'moss')];
   advanceSimulation(s, 2);
-  const [brood] = s.broods;
-  assert.equal(removePlant(s, brood.plantId).ok, true);
-  assert.equal(s.broods.length, 0);
-  for (const species of ['harlequin', 'angelfish']) {
+  const saved = restoreState(s);
+  const [brood] = saved.broods;
+  const plants = createAquaticPlants(saved.plants, { value: 0 });
+  const sites = plants.userData.leafSites;
+  const display = createBroodDisplay(new Group(), new Group());
+  display.update(saved.broods, new Map(), sites, 0);
+  const eggs = display.clutches.get(brood.id);
+  assert.equal(eggs.visible, true);
+  assert.ok(sites.get(brood.plantId).some(site => site.point.distanceTo(eggs.position) < .025));
+  removePlant(saved, brood.plantId);
+  display.update(saved.broods, new Map(), new Map(), 0);
+  assert.equal(display.clutches.size, 0);
+  display.dispose();
+  plants.children[0].geometry.dispose();
+  plants.children[0].material.dispose();
+});
+
+test('angelfish and discus parents guard a glass clutch in an unplanted tank', () => {
+  for (const species of ['angelfish', 'discus']) {
     const { s, mother, father } = pairTank(species);
     s.plants = [];
     advanceSimulation(s, 2);
-    if (species === 'harlequin') assert.equal(s.broods.length, 0);
-    else {
-      const clutch = s.broods[0];
-      assert.equal(Math.abs(clutch.position.z), 1.96);
-      advanceBehavior(s, 30);
-      for (const a of [mother, father]) {
-        assert.ok(Math.hypot(a.position.x - clutch.position.x, a.position.z - clutch.position.z) < 1);
-      }
+    const clutch = s.broods[0];
+    assert.equal(Math.abs(clutch.position.z), 1.96);
+    advanceBehavior(s, 30);
+    for (const a of [mother, father]) {
+      assert.ok(Math.hypot(a.position.x - clutch.position.x, a.position.z - clutch.position.z) < 1);
     }
   }
 });

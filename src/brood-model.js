@@ -6,7 +6,7 @@ const up = new THREE.Vector3(0, 1, 0);
 const down = new THREE.Vector3(0, -1, 0);
 
 // Instances share the egg shell geometry. Only deposited clutches and carried
-// shrimp eggs are drawn; guppy embryos develop inside the mother.
+// shrimp eggs are drawn; livebearer embryos develop inside the mother.
 export function createBroodDisplay(tank, hardscape) {
   const clutches = new Map();
   const geometry = new THREE.SphereGeometry(1, 12, 8);

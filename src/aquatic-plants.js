@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { substrateHeight } from './simulation.js';
 import { plantBed, plantRandom } from './plant-layout.js';
+import { hullFromVertices } from './scene-collisions.js';
 
 const TAU = Math.PI * 2;
 const clamp = THREE.MathUtils.clamp;
@@ -75,6 +76,11 @@ class PlantMesh {
   uv = [];
   flex = [];
   indices = [];
+  contacts = { roots: [], leaves: [] };
+
+  contactRows(target, first, rowSize, from, to) {
+    target.push(hullFromVertices(this.positions, first + rowSize * from, rowSize * (to - from + 1)));
+  }
 
   vertex(point, tile, u, t, tint, shade, flex) {
     const index = this.positions.length / 3;
@@ -109,6 +115,7 @@ class PlantMesh {
       if (normal.y < 0) normal.negate();
       this.leafSites.push({ point, normal, flex: this.flex[middle] });
     }
+    return first;
   }
 
   stem(points, radius, tint, flex = 0, sides = 6) {
@@ -131,6 +138,7 @@ class PlantMesh {
         }
       }
     }
+    return first;
   }
 
   finish() {
@@ -153,7 +161,7 @@ function grassBlade(batch, root, height, halfWidth, heading, leanX, leanZ, rng, 
   const young = rng() < .32, tipDrop = rng() * .16;
   const brightness = .76 + rng() * .25;
   const tint = [brightness * (.91 + rng() * .12), brightness, brightness * (.86 + rng() * .16)];
-  batch.grid(short ? 8 : 27, short ? 2 : 4, short ? 6 : Number(young), tint, (t, q) => {
+  const first = batch.grid(short ? 8 : 27, short ? 2 : 4, short ? 6 : Number(young), tint, (t, q) => {
     const wave = Math.sin(t * 6.1 + phase) * t;
     // Long supple blades first bow into the current, then undulate along it.
     const sweep = short ? 0 : Math.sin(t * 7.8 + phase) * Math.sin(Math.PI * t) * height * .073;
@@ -171,6 +179,14 @@ function grassBlade(batch, root, height, halfWidth, heading, leanX, leanZ, rng, 
       flex: t ** 1.6 * height * (short ? .28 : .77),
     };
   }, !short);
+  if (!short) {
+    // Only the basal sheath is firm. Farther up the ribbon, the fish can
+    // brush the leaf aside. Short spans follow its bend through the clump.
+    batch.contactRows(batch.contacts.roots, first, 5, 0, 2);
+    for (const [from, to] of [[2, 8], [8, 15], [15, 21], [21, 27]]) {
+      batch.contactRows(batch.contacts.leaves, first, 5, from, to);
+    }
+  }
 }
 
 function vallisneria(batch, x, z, growth, rng) {
@@ -199,7 +215,8 @@ function anubias(batch, x, z, growth, rng) {
     const rx = x + Math.cos(angle) * along, rz = z + Math.sin(angle) * along;
     rhizome.push(v3(rx, substrateHeight(rx, rz) + .045, rz));
   }
-  batch.stem(rhizome, .04 * growth, [.7,.78,.5]);
+  const first = batch.stem(rhizome, .04 * growth, [.7,.78,.5]);
+  for (let i = 0; i < rhizome.length - 1; i++) batch.contactRows(batch.contacts.roots, first, 7, i, i + 1);
   for (let k = 0; k < 14; k++) {
     const base = rhizome[k % rhizome.length];
     const a = angle + k * 2.399 + rng() * .6;
@@ -212,7 +229,8 @@ function anubias(batch, x, z, growth, rng) {
       p.y += rise * t;
       return p;
     });
-    batch.stem(petiole, .011 * growth, [.85,1,.72], .055);
+    const stalk = batch.stem(petiole, .011 * growth, [.85,1,.72], .055);
+    batch.contactRows(batch.contacts.roots, stalk, 7, 0, 1);
     const origin = petiole[3];
     const length = (.33 + rng() * .37) * growth;
     const width = length * (.25 + rng() * .10), tilt = .13 + rng() * .65;
@@ -220,7 +238,7 @@ function anubias(batch, x, z, growth, rng) {
     const roll = (rng() - .5) * .88, phase = rng() * TAU;
     const young = rng() < .28, shade = .83 + .19 * rng();
     const tint = [shade * (.95 + rng() * .11), shade, shade * (.91 + rng() * .13)];
-    batch.grid(18, 8, young ? 3 : 2, tint, (t, q) => {
+    const blade = batch.grid(18, 8, young ? 3 : 2, tint, (t, q) => {
       const s = Math.sin(Math.PI * t);
       const span = width * (.009 + Math.max(0, s) ** .72 * (1.22 - .43 * t));
       const edge = Math.abs(q);
@@ -231,6 +249,8 @@ function anubias(batch, x, z, growth, rng) {
       p.y += span * edge ** 2 * Math.sin(t * 20 + phase) * .038;
       return { point: p, shade: .83 + .16 * Math.min(1, t * 3), flex: .055 + t * .19 };
     });
+    batch.contactRows(batch.contacts.leaves, blade, 9, 0, 9);
+    batch.contactRows(batch.contacts.leaves, blade, 9, 9, 18);
   }
 }
 
@@ -267,7 +287,9 @@ function moss(batch, x, z, growth, rng) {
       p.y += h * (t - .13 * t * t);
       return p;
     };
-    batch.stem([0,.25,.5,.75,1].map(point), .007 * growth, [.73,.78,.49], .03, 4);
+    const shoot = batch.stem([0,.25,.5,.75,1].map(point), .007 * growth, [.73,.78,.49], .03, 4);
+    batch.contactRows(batch.contacts.leaves, shoot, 5, 1, 4);
+    batch.leafSites.push({ point: point(.75), normal: v3(0,1,0), flex: .03 * .75 });
     const tint = [.80 + rng() * .16, .83 + rng() * .16, .76 + rng() * .13];
     for (let j = 1; j <= 8; j++) {
       const t = j / 9.5;
@@ -314,6 +336,7 @@ export function createAquaticPlants(plants, time, manager) {
   group.name = 'Aquatic vegetation';
   if (!plants.length) return group;
   const batch = new PlantMesh();
+  group.userData.plantContacts = batch.contacts;
   group.userData.leafSites = new Map();
   const grow = { vallisneria, anubias, moss };
   for (const plant of plants) {

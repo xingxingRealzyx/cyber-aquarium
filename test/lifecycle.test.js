@@ -18,12 +18,13 @@ function reload(tank) {
 }
 
 test('stocked groups include breeding pairs and a selected sex persists in every species', () => {
-  const tank = createInitialState();
+  const starter = createInitialState();
   for (const species of ['neon', 'guppy', 'shrimp']) {
-    const sexes = new Set(tank.animals.filter(a => a.species === species).map(a => a.sex));
+    const sexes = new Set(starter.animals.filter(a => a.species === species).map(a => a.sex));
     assert.deepEqual(sexes, new Set(['male', 'female']));
   }
   for (const species of Object.keys(SPECIES)) {
+    const tank = emptyTank();
     for (const sex of ['male', 'female']) {
       const animal = addAnimal(tank, species, sex).animal;
       assert.equal(animal.sex, sex);
@@ -49,7 +50,7 @@ test('legacy invertebrates remain full-sized adults with stable sexes after migr
   }
 });
 
-test('all seven newborn body sizes survive reloading and grow gradually to reproductive maturity', () => {
+test('newborns of every species retain their size after reloading and grow gradually to reproductive maturity', () => {
   for (const [species, spec] of Object.entries(SPECIES)) {
     // A few minutes after birth. The state also supports children whose parents have since left.
     const originalSize = .32;

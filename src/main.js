@@ -5,7 +5,7 @@ import { sceneryPanel } from './scenery-panel.js';
 import { REPRODUCTION } from './reproduction.js';
 import {
   createInitialState, restoreState, advanceSimulation, addAnimal, addPlant, feed,
-  changeWater, removeAnimal, removeDead, getAssessment, SPECIES,
+  changeWater, removeAnimal, removeDead, getAssessment, residentWaterRange, waterInRange, SPECIES,
   addHardscape, removeHardscape, removePlant, addToy, removeToy, animalLifeStage, relativeAdultSize, availableAnimalSlots,
   corpseDecay, INFECTIONS, careForFish,
 } from './simulation.js';
@@ -135,7 +135,8 @@ function sexLabel(a) {
 function behaviorLabel(a) {
   if(!a.alive) return '已死亡 · 待捞起';
   if(state.paused) return '已暂停';
-  return ({seeking:'正在追逐饲料',eating:'正在进食',resting:'饱腹休憩',gasping:'浮头呼吸',grazing:'底部觅食',swimming:'自由游动'})[a.behavior] || '自由游动';
+  return ({seeking:'正在追逐饲料',eating:'正在进食',resting:'饱腹休憩',gasping:'浮头呼吸',grazing:'底部觅食',
+    swimming:'自由游动',schooling:'跟随鱼群',chasing:'追逐同伴',darting:'与同伴嬉游',evading:'游开躲避潜水员'})[a.behavior] || '自由游动';
 }
 function durationLabel(hours) {
   if(hours<1/60) return '不到 1 分钟';
@@ -167,11 +168,19 @@ function broodPanel() {
 }
 function waterPanel() {
   const w=state.water, a=getAssessment(state), living=state.animals.filter(x=>x.alive).length;
+  function rangeMetric(name, key, digits, unit, ratio) {
+    const range = residentWaterRange(state, key);
+    const [low, high] = range;
+    const value = w[key].toFixed(digits);
+    const target = low === high ? String(low) : `${low}–${high}`;
+    const note = low > high ? '当前居民的适宜范围无交集' : `${living ? '居民适宜' : '参考范围'} ${target}${key === 'temperature' ? ' °C' : ''}`;
+    return metric(name, value, unit, note, ratio, waterInRange(w, key, range) ? '' : 'warning');
+  }
   return `<div class="assessment ${a.level}"><span class="status-orb"></span><div><b>${escape(a.label)}</b><p>${escape(a.message)}</p></div></div>
     <div class="section-label"><span>水质快照</span><span>${living} 位居民</span></div>
     <div class="metrics">
-      ${metric('水温',w.temperature.toFixed(1),'°C','混养目标 24–26 °C',(w.temperature-16)/16,w.temperature<22||w.temperature>28?'warning':'')}
-      ${metric('酸碱度',w.ph.toFixed(2),'pH','弱酸至中性水', (w.ph-5)/4,w.ph<6||w.ph>8?'warning':'')}
+      ${rangeMetric('水温','temperature',1,'°C',(w.temperature-16)/16)}
+      ${rangeMetric('酸碱度','ph',2,'pH',(w.ph-5)/4)}
       ${metric('溶解氧',w.oxygen.toFixed(2),'mg/L','关注缺氧 · 目标 ≥ 5',w.oxygen/10,w.oxygen<4?'danger':w.oxygen<5?'warning':'')}
       ${metric('总氨',w.ammonia.toFixed(3),'mg N/L','TAN · 含 NH₃ / NH₄⁺',w.ammonia/.6,w.ammonia>.2?'warning':'')}
       ${metric('亚硝酸盐',w.nitrite.toFixed(3),'mg N/L','NO₂-N · 越低越好',w.nitrite/.3,w.nitrite>.1?'danger':'')}
@@ -195,7 +204,7 @@ function residentRow(a) {
     ? `<span class="${a.health<50?'warning':''}">健康 ${Math.round(a.health)}%</span><small class="${a.hunger>70?'warning':''}">饥饿 ${Math.round(a.hunger)}%</small>`
     : `<span class="warning">已分解 ${Math.round(corpseDecay(a)*100)}%</span>`;
   return `<button class="resident ${a.id===selectedId?'selected':''}" data-select="${escape(a.id)}">
-    <span class="resident-dot ${a.species} ${!a.alive?'dead':''}"></span>
+    <span class="resident-dot ${a.alive ? a.species : 'dead'}"></span>
     <span class="resident-name">${escape(animalLabel(a))}<small class="${infection?'case-summary':''}">${sexLabel(a)} · ${stageLabel(a)} · ${summary}</small></span>
     <span class="resident-vitals">${status}</span></button>`;
 }
@@ -599,8 +608,10 @@ try {
     const dt=Math.max(0,Math.min((now-previous)/1000,1)); previous=now; elapsed+=dt;
     // After a stalled frame, resume along the curve without skipping an entire turn.
     const motionDt=Math.min(dt,.1);
-    if(!state.paused) advanceSimulation(state,dt*state.speed/3600);
-    advanceBehavior(state,motionDt);
+    if (!state.paused) {
+      advanceSimulation(state,dt*state.speed/3600);
+      advanceBehavior(state,motionDt,renderer.prepareCollisions(state,motionDt));
+    }
     renderer.update(state,dt,elapsed,motionDt);
     if (verifyUpdateFrame && document.visibilityState === 'visible' &&
         renderer.renderer.domElement.style.visibility !== 'hidden' && renderer.renderer.info.render.triangles > 0 && !gl.isContextLost()) {

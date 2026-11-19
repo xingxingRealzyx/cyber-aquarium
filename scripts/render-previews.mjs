@@ -13,7 +13,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createResidentModel } from '/src/aquarium.js';
 import { SPECIES } from '/src/simulation.js';
 
-export function renderPortraits() {
+export function renderPortraits(selection) {
   const renderer = new THREE.WebGLRenderer({alpha:true, antialias:true, preserveDrawingBuffer:true});
   renderer.setSize(420, 192);
   renderer.setClearColor(0, 0);
@@ -32,7 +32,8 @@ export function renderPortraits() {
   rim.position.set(-3,1,-2); scene.add(rim);
   const camera = new THREE.OrthographicCamera(-1,1,.5,-.5,.01,12);
   const portraits = {};
-  for(const species of Object.keys(SPECIES)) {
+  for(const species of selection.length ? selection : Object.keys(SPECIES)) {
+    if (!Object.hasOwn(SPECIES, species)) throw new Error('Unknown species: ' + species);
     const subject = createResidentModel(species, .37);
     subject.rotation.y = -.15; scene.add(subject);
     const box = new THREE.Box3().setFromObject(subject);
@@ -66,7 +67,7 @@ try {
   const page = await browser.newPage();
   await page.route('**/portrait-stage', route => route.fulfill({contentType:'text/html',body:'<!doctype html><title>Species portraits</title>'}));
   await page.goto(new URL('portrait-stage', origin).href);
-  const portraits = await page.evaluate(async () => (await import('/@id/__x00__virtual:species-portraits')).renderPortraits());
+  const portraits = await page.evaluate(async selection => (await import('/@id/__x00__virtual:species-portraits')).renderPortraits(selection), process.argv.slice(2));
   await mkdir(output,{recursive:true});
   for(const [species,data] of Object.entries(portraits)) {
     await writeFile(new URL(`${species}.png`,output),Buffer.from(data,'base64'));

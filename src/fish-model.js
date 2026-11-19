@@ -1,23 +1,67 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { createFishMaterials, applyDecayMaterial } from './fish-materials.js';
+import { createFishMaterials, applyDecayMaterial, hasFinAtlas } from './fish-materials.js';
 
-// Dimensions in scene units, measured from the caudal peduncle to the snout.
-// The separate upper/lower profiles let a tetra, a gravid-looking guppy and a
-// laterally compressed angelfish have different silhouettes from every angle.
-const PROFILES = {
-  neon: { length: .63, nose: .31, top: .125, belly: .116, width: .074, tail: .19, spread: .117, fork: .46, eye: .032 },
-  guppy: { length: .63, nose: .32, top: .120, belly: .135, width: .086, tail: .30, spread: .202, fork: -.13, eye: .034 },
-  angelfish: { length: .71, nose: .34, top: .259, belly: .252, width: .077, tail: .225, spread: .172, fork: -.05, eye: .043 },
-  zebra: { length: .78, nose: .38, top: .104, belly: .108, width: .072, tail: .186, spread: .126, fork: .54, eye: .030 },
-  harlequin: { length: .68, nose: .33, top: .165, belly: .160, width: .084, tail: .203, spread: .146, fork: .52, eye: .035 },
-};
 const stations = [0, .10, .25, .43, .61, .75, .86, .94, .99, 1];
 const upper = [.21,.35,.68,.94,1,.90,.67,.40,.13,0];
 const lower = [.23,.30,.56,.84,1,.94,.71,.40,.14,0];
 const width = [.16,.28,.52,.82,.99,1,.81,.52,.19,0];
 const angelUpper = [.12,.27,.67,.96,1,.83,.56,.30,.12,0];
 const angelLower = [.12,.25,.59,.95,1,.97,.70,.36,.13,0];
+const discUpper = [.15,.41,.76,.97,1,.89,.67,.39,.105,0];
+const discLower = [.17,.44,.79,.98,1,.91,.72,.48,.13,0];
+const discWidth = [.15,.31,.59,.88,1,.94,.78,.48,.17,0];
+const deepBack = [.18,.31,.64,.94,1,.87,.58,.32,.10,0];
+
+// Body dimensions are measured from the caudal peduncle to the snout.
+// Median-fin front/back lie on that axis (0 = peduncle, 1 = snout).
+const PROFILES = {
+  neon: { length: .63, nose: .31, top: .125, belly: .116, width: .074, tail: .19, spread: .117, fork: .46, eye: .032,
+    iris: '#79847d', adipose: true },
+  guppy: { length: .63, nose: .32, top: .120, belly: .135, width: .086, tail: .30, spread: .202, fork: -.13, eye: .034,
+    noseLift: .035, dorsal: { height: .127, sweep: .125 } },
+  angelfish: { length: .71, nose: .34, top: .259, belly: .252, width: .077, tail: .225, spread: .172, fork: -.05, eye: .043,
+    upper: angelUpper, lower: angelLower, iris: '#8b4434', pelvicStreamer: .40, beat: 5.8, amplitude: .42,
+    dorsal: { front: .70, back: .045, tip: .30, height: .25, sweep: .15 },
+    anal: { front: .61, height: .23, sweep: .15 } },
+  zebra: { length: .78, nose: .38, top: .104, belly: .108, width: .072, tail: .186, spread: .126, fork: .54, eye: .030,
+    dorsal: { front: .47 }, anal: { height: .09 } },
+  harlequin: { length: .68, nose: .33, top: .165, belly: .160, width: .084, tail: .203, spread: .146, fork: .52, eye: .035,
+    iris: '#998061' },
+  discus: { length: .84, nose: .43, top: .336, belly: .321, width: .105, tail: .169, spread: .126, roundTail: true, eye: .044,
+    upper: discUpper, lower: discLower, girth: discWidth, noseLift: -.018, eyeStation: .835, iris: '#d84829', irisInnerRing: 7, pairedScale: 1.10,
+    pelvicStreamer: .19, beat: 5.1, amplitude: .35, flex: .14,
+    dorsal: { front: .82, back: .032, tip: .51, height: .112, sweep: .062, backHeight: .41 },
+    anal: { front: .61, back: .037, tip: .40, height: .100, sweep: .076, backHeight: .41 } },
+  cardinal: { length: .68, nose: .33, top: .12, belly: .113, width: .067, tail: .171, spread: .102, roundedLobes: true, fork: .56, eye: .032,
+    iris: '#83938c', adipose: true, dorsal: { front: .55, back: .34, height: .085 }, beat: 9.1 },
+  rummynose: { length: .70, nose: .35, top: .11, belly: .114, width: .070, tail: .21, spread: .16, roundedLobes: true, fork: .68, eye: .033,
+    iris: '#ac7a60', adipose: true, dorsal: { front: .53, back: .33, height: .11 },
+    anal: { front: .45, back: .09, height: .087 }, beat: 9.4 },
+  blackneon: { length: .65, nose: .32, top: .129, belly: .14, width: .071, tail: .173, spread: .118, roundedLobes: true, fork: .49, eye: .034,
+    iris: '#bdbc98', upperIris: '#df502b', adipose: true, dorsal: { front: .56, back: .32, height: .094 },
+    anal: { front: .49, back: .10, height: .09 } },
+  cherrybarb: { length: .69, nose: .35, top: .134, belly: .128, width: .089, tail: .19, spread: .127, roundedLobes: true, fork: .49, eye: .032,
+    iris: '#ad805b', dorsal: { front: .63, back: .34, height: .106, sweep: .075 },
+    anal: { front: .36, back: .19, height: .080 }, beat: 7.9 },
+  tigerbarb: { length: .69, nose: .35, top: .199, belly: .173, width: .096, tail: .185, spread: .15, roundedLobes: true, fork: .61, eye: .035,
+    upper: deepBack, iris: '#c79151', dorsal: { front: .65, back: .29, height: .147, sweep: .066 },
+    anal: { front: .39, back: .17, height: .10 }, beat: 8.5 },
+  galaxy: { length: .54, nose: .26, top: .097, belly: .114, width: .069, tail: .139, spread: .083, roundedLobes: true, fork: .27, eye: .032,
+    iris: '#c69854', pairedScale: .79, noseLift: .018, dorsal: { front: .50, back: .23, height: .080 },
+    anal: { front: .42, back: .19, height: .084 }, beat: 10.2 },
+  blackskirt: { length: .68, nose: .34, top: .193, belly: .215, width: .074, tail: .173, spread: .138, roundedLobes: true, fork: .53, eye: .036,
+    upper: deepBack, iris: '#94938c', adipose: true, dorsal: { front: .65, back: .40, height: .161, sweep: .06 },
+    anal: { front: .56, back: .075, tip: .22, height: .138, sweep: .095, backHeight: .41 }, beat: 7.4 },
+  boesemani: { length: .88, nose: .43, top: .202, belly: .174, width: .102, tail: .23, spread: .174, roundedLobes: true, fork: .48, eye: .037,
+    upper: deepBack, iris: '#c69a50', pairedScale: 1.16, beat: 6.9, noseLift: .028,
+    firstDorsal: { front: .59, back: .48, tip: .44, height: .091, sweep: .043 },
+    dorsal: { front: .45, back: .08, tip: .42, height: .103, sweep: .066, backHeight: .39 },
+    anal: { front: .57, back: .075, tip: .30, height: .098, sweep: .068, backHeight: .35 } },
+  platy: { length: .62, nose: .30, top: .152, belly: .173, width: .105, tail: .157, spread: .127, roundTail: true, eye: .033,
+    iris: '#a78c55', noseLift: .038, dorsal: { front: .60, back: .28, height: .124, sweep: .074 },
+    anal: { front: .48, back: .34, height: .071 }, beat: 7.8 },
+};
 const pi2 = Math.PI * 2;
 const smooth = THREE.MathUtils.smoothstep;
 const v3 = (x,y,z=0) => new THREE.Vector3(x,y,z);
@@ -42,10 +86,9 @@ function sampleProfile(values, u) {
 
 function section(p,u,angle) {
   const up = -Math.cos(angle);
-  const isAngel = p === PROFILES.angelfish;
-  const height = up > 0 ? p.top*sampleProfile(isAngel?angelUpper:upper,u) : p.belly*sampleProfile(isAngel?angelLower:lower,u);
-  const noseLift = (p === PROFILES.guppy ? .035 : .012) * smooth(u,.74,1);
-  return v3(p.nose - p.length*(1-u),up*height + noseLift,p.width*sampleProfile(width,u)*Math.sin(angle));
+  const height = up > 0 ? p.top*sampleProfile(p.upper ?? upper,u) : p.belly*sampleProfile(p.lower ?? lower,u);
+  const noseLift = (p.noseLift ?? .012) * smooth(u,.74,1);
+  return v3(p.nose - p.length*(1-u),up*height + noseLift,p.width*sampleProfile(p.girth ?? width,u)*Math.sin(angle));
 }
 
 function surface(rows, cols, at) {
@@ -85,7 +128,13 @@ function tailGeometry(p) {
   const baseX=p.nose-p.length+.018;
   return surface(10,32,(u,v)=>{
     const spread=v*2-1, edge=Math.abs(spread);
-    const length=p.tail*(1-p.fork*(1-edge**1.32))*(1-.045*edge**12);
+    // The longest rays of a forked tail sit inside each lobe; the short
+    // outermost rays round off the tips and leave a broad strip of membrane.
+    let outline;
+    if (p.roundTail) outline = .38 + .62 * Math.sqrt(1-spread*spread);
+    else if (p.roundedLobes) outline = 1 - p.fork*(1-smooth(edge,.02,.76)) - .16*smooth(edge,.83,1);
+    else outline = (1-p.fork*(1-edge**1.32))*(1-.045*edge**12);
+    const length = p.tail * outline;
     const scallop=1-.018*(1-Math.cos(v*pi2*11))*.5;
     const y=spread*(p.top*.19*(1-u)+p.spread*u*scallop);
     const z=.009*Math.sin(v*pi2*9)*u**1.5+.012*Math.cos(spread*Math.PI)*u*u;
@@ -93,13 +142,13 @@ function tailGeometry(p) {
   });
 }
 
-function midlineFin(p,{front,back,tip,sign,height,sweep}) {
+function midlineFin(p,{front,back,tip,sign,height,sweep,backHeight=.07}) {
   return surface(6,24,(u,v)=>{
     const station=front+(back-front)*v;
     const body=section(p,station,sign>0?Math.PI:0);
     // The high first rays and shorter trailing rays create a swept soft margin.
     const leading=Math.sin(Math.min(1,v/tip)*Math.PI/2);
-    const trailing=1-smooth(v,tip,1)*.93;
+    const trailing=1-smooth(v,tip,1)*(1-backHeight);
     const extension=height*(.015+.985*leading)*trailing;
     const ripple=.005*Math.sin(v*22*Math.PI)*u;
     return v3(body.x-sweep*u*(.25+.75*leading),body.y+sign*(extension*u-.009),ripple);
@@ -107,28 +156,44 @@ function midlineFin(p,{front,back,tip,sign,height,sweep}) {
 }
 
 function pairedFin(p,side,pelvic) {
-  const isAngel=p===PROFILES.angelfish;
   const anchor=section(p,pelvic?.56:.70,side>0?(pelvic?.12:.205)*pi2:(pelvic?.88:.795)*pi2);
-  if(pelvic && isAngel) {
-    return surface(16,3,(u,v)=>v3(anchor.x-.12*u-.08*u*u+(v-.5)*.027*(1-.97*u),anchor.y-.40*u,
+  if(pelvic && p.pelvicStreamer) {
+    const length = p.pelvicStreamer;
+    return surface(16,3,(u,v)=>v3(anchor.x-length*(.3*u+.2*u*u)+(v-.5)*.027*(1-.97*u),anchor.y-length*u,
       anchor.z+side*(.025*Math.sin(Math.PI*u)+.018*u)));
   }
   return surface(7,14,(u,v)=>{
     const lobe=.25+.75*Math.sin(v*Math.PI)**.75;
-    const size=pelvic?.105:.144;
-    return v3(anchor.x-size*u*lobe+(v-.5)*.022,anchor.y + (v-.5)*(.013+u*(pelvic?.11:.10))-.035*u,
-      anchor.z+side*((pelvic?.035:.088)*u*lobe+.003*Math.cos(v*Math.PI*9)*u));
+    const scale = p.pairedScale ?? 1;
+    const size=(pelvic?.105:.144)*scale;
+    return v3(anchor.x-size*u*lobe+(v-.5)*.022,anchor.y + (v-.5)*(.013+u*scale*(pelvic?.11:.10))-.035*u*scale,
+      anchor.z+side*((pelvic?.035:.088)*scale*u*lobe+.003*Math.cos(v*Math.PI*9)*u));
   });
 }
 
-function finGeometry(p) {
-  const isAngel=p===PROFILES.angelfish, isGuppy=p===PROFILES.guppy, isZebra=p===PROFILES.zebra;
-  const dorsal=midlineFin(p,{front:isAngel?.70:isZebra?.47:.62,back:isAngel?.045:.24,tip:isAngel?.30:.24,sign:1,
-    height:isAngel?.25:isGuppy?.127:.093,sweep:isAngel?.15:isGuppy?.125:.06});
-  const anal=midlineFin(p,{front:isAngel?.61:.45,back:.12,tip:.22,sign:-1,height:isAngel?.23:isZebra?.09:.067,sweep:isAngel?.15:.052});
-  const surfaces=[dorsal,anal];
-  for(const side of [-1,1]) surfaces.push(pairedFin(p,side,false),pairedFin(p,side,true));
-  if(p===PROFILES.neon)surfaces.push(midlineFin(p,{front:.19,back:.09,tip:.38,sign:1,height:.021,sweep:.012}));
+// Four rows share one material so dorsal/anal pigments stay off the clear
+// pectorals. Inset by half a texel at both ends of a row to keep its border.
+function setFinAtlasRow(geometry, row) {
+  const uv = geometry.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setY(i,(row + (.5 + 95*uv.getY(i))/96)/4);
+}
+
+function finGeometry(p, atlas = false) {
+  const dorsal = midlineFin(p,{front:.62,back:.24,tip:.24,sign:1,height:.093,sweep:.06,...p.dorsal});
+  const anal = midlineFin(p,{front:.45,back:.12,tip:.22,sign:-1,height:.067,sweep:.052,...p.anal});
+  const surfaces = [];
+  const add = (part, row) => {
+    if (atlas) setFinAtlasRow(part, row);
+    surfaces.push(part);
+  };
+  add(dorsal,0);
+  add(anal,1);
+  for(const side of [-1,1]) {
+    add(pairedFin(p,side,false),2);
+    add(pairedFin(p,side,true),3);
+  }
+  if(p.adipose) add(midlineFin(p,{front:.19,back:.09,tip:.38,sign:1,height:.021,sweep:.012}),0);
+  if(p.firstDorsal) add(midlineFin(p,{...p.firstDorsal,sign:1}),0);
   const joined=mergeGeometries(surfaces);
   surfaces.forEach(g=>g.dispose());
   return joined;
@@ -136,13 +201,13 @@ function finGeometry(p) {
 
 function faceGeometry(p) {
   const details=[];
-  const irisColor = p===PROFILES.angelfish ? '#8b4434' : p===PROFILES.neon ? '#79847d' : p===PROFILES.harlequin ? '#998061' : '#938966';
-  const iris = new THREE.Color(irisColor);
+  const iris = new THREE.Color(p.iris ?? '#938966');
+  const upperIris = p.upperIris ? new THREE.Color(p.upperIris) : iris;
   const pupil = new THREE.Color('#11171a');
   const limbus = new THREE.Color('#343c39');
   const innerRim = new THREE.Color('#5e6051');
   for(const side of [-1,1]) {
-    const eyeMount=section(p,.845,(side>0?.282:.718)*pi2);
+    const eyeMount=section(p,p.eyeStation ?? .845,(side>0?.282:.718)*pi2);
     const eye=surface(12,32,(r,t)=>{
       const radius=p.eye*.94*r, a=t*pi2;
       return v3(eyeMount.x+radius*Math.cos(a),eyeMount.y+radius*.97*Math.sin(a),
@@ -152,9 +217,10 @@ function faceGeometry(p) {
     for(let i=0;i<=12;i++)for(let j=0;j<=32;j++) {
       const angle=j/32*pi2;
       let color=pupil;
-      if(i===9) color=innerRim;
-      if(i===10||i===11) {
-        color=iris.clone().multiplyScalar(.80+.13*Math.cos(angle*7)+.07*Math.sin(angle*13));
+      const rimRow = p.irisInnerRing ?? 9;
+      if(i===rimRow) color=innerRim;
+      if(i>rimRow && i<12) {
+        color=(Math.sin(angle)>0 ? upperIris : iris).clone().multiplyScalar(.80+.13*Math.cos(angle*7)+.07*Math.sin(angle*13));
       }
       if(i===12) color=limbus;
       colors.push(color.r,color.g,color.b);
@@ -187,17 +253,20 @@ function colorGeometry(geometry,hex) {
 
 // Two relative morph targets form a travelling wave. Blending their sine and
 // cosine coefficients on the GPU keeps the caudal peduncle and fin connected.
+function swimAmplitude(p,x) {
+  return Math.max(0,(p.nose*.56-x)/(p.length+p.tail))**1.65 * (p.flex ?? .22);
+}
+
 function swimMorphs(geometry,p,pairedFins=false) {
   const pos=geometry.attributes.position,normals=geometry.attributes.normal;
   const positions=[[],[]], normalDeltas=[[],[]];
-  const amplitudeAt=x=>Math.max(0,(p.nose*.56-x)/(p.length+p.tail))**1.65 * .22;
   for(let i=0;i<pos.count;i++) {
     const x=pos.getX(i),z=pos.getZ(i),phase=(p.nose-x)*7.1;
     for(let wave=0;wave<2;wave++) {
       const offset=wave*Math.PI/2;
-      const displacement=amplitudeAt(x)*Math.sin(phase+offset);
+      const displacement=swimAmplitude(p,x)*Math.sin(phase+offset);
       // Tilt the normals by the spatial derivative of the bending surface.
-      const ahead=amplitudeAt(x+.0001)*Math.sin(phase-.00071+offset);
+      const ahead=swimAmplitude(p,x+.0001)*Math.sin(phase-.00071+offset);
       const slope=(ahead-displacement)/.0001;
       const pectoral=pairedFins ? Math.sign(z)*smooth(Math.abs(z),p.width,p.width+.078)*Math.sin(phase+offset)*.032 : 0;
       positions[wave].push(0,0,displacement+pectoral);
@@ -210,13 +279,49 @@ function swimMorphs(geometry,p,pairedFins=false) {
   return geometry;
 }
 
+const outlines = new Map();
+
+// A few cross-sections bound the actual animated mesh tightly at the nose
+// and tail. The collision solver reuses these local bounds across all fish.
+export function fishCollisionOutline(species) {
+  if (outlines.has(species)) return outlines.get(species);
+  const p = PROFILES[species];
+  const sections = Array.from({length: 9}, () => new THREE.Box3());
+  const vertex = new THREE.Vector3();
+  for (const [i,g] of [bodyGeometry(p),tailGeometry(p),finGeometry(p),faceGeometry(p)].entries()) {
+    const positions = g.attributes.position;
+    for (let j=0; j<positions.count; j++) {
+      vertex.fromBufferAttribute(positions,j);
+      const t = 1 + (vertex.x - p.nose) / (p.length+p.tail);
+      const box = sections[Math.max(0,Math.min(sections.length-1,Math.floor(t*sections.length)))];
+      const finBeat = i === 2 ? smooth(Math.abs(vertex.z),p.width,p.width+.078)*.032 : 0;
+      const sweep = i === 3 ? 0 : .90*(swimAmplitude(p,vertex.x)+finBeat);
+      vertex.z -= sweep;
+      box.expandByPoint(vertex);
+      vertex.z += 2*sweep;
+      box.expandByPoint(vertex);
+    }
+    g.dispose();
+  }
+  const whole = new THREE.Box3();
+  const slices = sections.filter(s => !s.isEmpty()).map(s => {
+    s.expandByScalar(.002);
+    whole.union(s);
+    return { center:s.getCenter(new THREE.Vector3()), half:s.getSize(new THREE.Vector3()).multiplyScalar(.5) };
+  });
+  const {min,max} = whole;
+  const outline = { bounds:[min.x,max.x,min.y,max.y,min.z,max.z], slices };
+  outlines.set(species,outline);
+  return outline;
+}
+
 export function createFishModel(species,seed) {
   const profile=PROFILES[species] || PROFILES.neon;
   const materials=createFishMaterials(species,seed);
   const group=new THREE.Group();
   const body=new THREE.Mesh(swimMorphs(bodyGeometry(profile),profile),materials.body);
   const tail=new THREE.Mesh(swimMorphs(tailGeometry(profile),profile),materials.tail);
-  const fins=new THREE.Mesh(swimMorphs(finGeometry(profile),profile,true),materials.fin);
+  const fins=new THREE.Mesh(swimMorphs(finGeometry(profile,hasFinAtlas(species)),profile,true),materials.fin);
   const face=new THREE.Mesh(faceGeometry(profile),new THREE.MeshStandardMaterial({vertexColors:true,side:THREE.DoubleSide,roughness:.49}));
   // Two-sided membranes are thin and translucent. Draw each in one pass.
   for(const part of [fins,tail])part.material.forceSinglePass=true;
@@ -240,10 +345,10 @@ export function animateFish(model,animal,dt,swimSpeed,decay) {
     data.mouthGlow.visible = false;
     return;
   }
-  const angel=animal.species==='angelfish';
-  const rate=(angel?5.8:8.3)+Math.min(swimSpeed,2)*4+(seeking?2.5:0);
+  const profile=PROFILES[animal.species] ?? PROFILES.neon;
+  const rate=(profile.beat ?? 8.3)+Math.min(swimSpeed,2)*4+(seeking?2.5:0);
   data.swimPhase=(data.swimPhase+Math.max(0,dt)*rate)%pi2;
-  const amplitude=(angel?.42:.57)+Math.min(swimSpeed,.95)*.34;
+  const amplitude=(profile.amplitude ?? .57)+Math.min(swimSpeed,.95)*.34;
   const sine=Math.sin(data.swimPhase)*amplitude, cosine=Math.cos(data.swimPhase)*amplitude;
   for(const part of data.parts) {
     part.morphTargetInfluences[0]=cosine;
