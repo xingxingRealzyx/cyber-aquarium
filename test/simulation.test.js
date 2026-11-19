@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceBehavior } from '../src/behavior.js';
+import { advancePlayback } from '../src/playback.js';
 import {
   createInitialState, advanceSimulation, feed, changeWater, getAssessment, restoreState, ammoniaFraction,
   addAnimal, removeAnimal, removeDead, addPlant, removePlant, addHardscape, removeHardscape, MAX_HARDSCAPE,
@@ -206,8 +206,14 @@ test('unionized ammonia fraction rises with pH and temperature', () => {
   assert.ok(Math.abs(ammoniaFraction(25, 7) - 0.00564) < 0.0001);
 });
 
-test('a mature biofilter sustains the starter bioload with daily feeds and weekly water changes', () => {
+test('a mature biofilter sustains the starter bioload with daily feeds and weekly water changes', t => {
+  let seed = 42;
+  t.mock.method(Math, 'random', () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 2**32;
+  });
   const s = createInitialState();
+  s.speed = 3600;
   // Keep the same bioload for the two-week water-quality comparison.
   for (const animal of s.animals) {
     animal.sex = 'female';
@@ -216,9 +222,8 @@ test('a mature biofilter sustains the starter bioload with daily feeds and weekl
   s.infectionClock.nextAtHours = Number.MAX_SAFE_INTEGER;
   for (let day = 0; day < 14; day++) {
     feed(s);
-    // Feed must actually be reached before chemistry can advance through a day.
-    for(let frame=0;frame<900;frame++) advanceBehavior(s,1/30);
-    advanceSimulation(s, 24);
+    // Give the daily ration and the biofilter the same 24 tank hours.
+    for (let hour = 0; hour < 24; hour++) advancePlayback(s, 1, () => null);
     if (day % 7 === 6) changeWater(s, 0.25);
   }
   assert.equal(s.animals.filter(a => a.alive).length, 12);
