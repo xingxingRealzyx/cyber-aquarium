@@ -6,6 +6,8 @@ const gap = .002;
 const previousTilt = new Quaternion(), still = new Vector3();
 const delta = new Vector3(), target = new Vector3(), direction = new Vector3();
 const oldOffset = new Vector3(), candidate = new Vector3(), normal = new Vector3();
+const desiredVelocity = new Vector3(), courseVelocity = new Vector3();
+const coast = new Vector3(), bestPosition = new Vector3();
 const local = new Vector3(), retreat = new Vector3(), anchor = new Vector3(), nearGoal = new Vector3();
 
 function hull(count) {
@@ -15,6 +17,7 @@ function hull(count) {
 // Intersection of a swept moving hull with a stationary hull, including thin
 // branches that both endpoints clear. A negative entry means they already touch.
 function interval(axes, p, shape, velocity, solid) {
+  shape=solid.toySection?.fitted() ?? shape;
   let enter = -Infinity, exit = Infinity, face = 0;
   for (let i = 0; i < axes.length; i++) {
     const center = axes[i].dot(p), rate = axes[i].dot(velocity);
@@ -32,6 +35,7 @@ function interval(axes, p, shape, velocity, solid) {
 }
 
 function nearSegment(shape, a, b, solid, margin=0) {
+  shape=solid.toySection ?? shape;
   return Math.min(a.x,b.x) + shape.lo[0] < solid.hi[0]+margin && Math.max(a.x,b.x) + shape.hi[0] > solid.lo[0]-margin &&
     Math.min(a.y,b.y) + shape.lo[1] < solid.hi[1]+margin && Math.max(a.y,b.y) + shape.hi[1] > solid.lo[1]-margin &&
     Math.min(a.z,b.z) + shape.lo[2] < solid.hi[2]+margin && Math.max(a.z,b.z) + shape.hi[2] > solid.lo[2]-margin;
@@ -63,6 +67,7 @@ function separate(axes, p, shape, solids, kind, level, courseY) {
     let touching=false;
     for (const solid of solids) {
       if (!nearSegment(shape,local,local,solid) || !interval(axes,local,shape,direction,solid)) continue;
+      const section=solid.toySection?.fitted() ?? shape;
       let shortest=Infinity;
       for (let i=0;i<axes.length;i++) for (const sign of [-1,1]) {
         normal.copy(axes[i]).multiplyScalar(sign);
@@ -70,7 +75,7 @@ function separate(axes, p, shape, solids, kind, level, courseY) {
         const room=normal.lengthSq();
         if (room<1e-8) continue;
         const center=axes[i].dot(local);
-        const depth=(sign>0 ? solid.hi[i]-shape.lo[i]-center : center+shape.hi[i]-solid.lo[i])+gap;
+        const depth=(sign>0 ? solid.hi[i]-section.lo[i]-center : center+section.hi[i]-solid.lo[i])+gap;
         if (depth*depth/room>=shortest) continue;
         candidate.copy(local).addScaledVector(normal,depth/room);
         contain(candidate,shape,kind,level,courseY);
@@ -135,6 +140,52 @@ function slide(axes, p, shape, goal, solids, kind, level, courseY) {
   separate(axes,p,shape,solids,kind,level,courseY);
 }
 
+// Reduce the approach speed before the body actually reaches a supporting
+// plane. The swept hull still enforces the final contact at narrow openings.
+function steer(axes, position, shape, solids, velocity, flow) {
+  const lookAhead=.8, standOff=.23;
+  for (const solid of solids) {
+    if (!nearSegment(shape,position,position,solid,.65)) continue;
+    let clearance=-Infinity, face=0, sign=1;
+    for (let i=0;i<axes.length;i++) {
+      const center=axes[i].dot(position);
+      const above=center+shape.lo[i]-solid.hi[i], below=solid.lo[i]-center-shape.hi[i];
+      if (above>clearance) { clearance=above; face=i; sign=1; }
+      if (below>clearance) { clearance=below; face=i; sign=-1; }
+    }
+    // Anticipate the relative approach of another moving body as well as
+    // our own travel. A fish can cross the clearance in a fraction of a kick.
+    const incoming=solid.velocity ? Math.max(0,Math.min(.7,sign*axes[face].dot(solid.velocity))) : 0;
+    const allowed=incoming+(standOff-clearance)/lookAhead, outward=sign*axes[face].dot(velocity);
+    if (outward>=allowed) continue;
+    const n=axes[face], az=sign*n.z, ax=sign*n.x;
+    velocity.addScaledVector(n,sign*(allowed-outward));
+    const horizontal=Math.hypot(ax,az);
+    if (horizontal<.35) continue;
+    // Drift around a vertical obstacle instead of pushing against the same
+    // plane until the underlying circulation loop has passed it.
+    normal.set(az/horizontal,0,-ax/horizontal);
+    const cruise=flow.length(), along=normal.dot(flow);
+    const side=Math.abs(along)>cruise*.22 ? Math.sign(along) :
+      Math.sign(normal.x*(position.x-(solid.hi[0]+solid.lo[0])/2)+normal.z*(position.z-(solid.hi[2]+solid.lo[2])/2)) || 1;
+    const extra=Math.min(allowed-outward,cruise*.90-side*normal.dot(velocity));
+    if (extra>0) velocity.addScaledVector(normal,side*extra);
+  }
+}
+
+// The overall body hull is enough when navigating clear water. At close
+// range the gap between arms or fins can receive a fish, branch or leaf.
+function addSectionPairs(solids, shape, from, to, obstacle, margin) {
+  if (!nearSegment(shape,from,to,obstacle,margin)) return;
+  for (const section of shape.sections) {
+    if (!nearSegment(section,from,to,obstacle,margin)) continue;
+    for (const slice of obstacle.sections ?? [obstacle]) {
+      if (nearSegment(section,from,to,slice,margin))
+        solids.push({lo:slice.lo,hi:slice.hi,toySection:section});
+    }
+  }
+}
+
 // The renderer supplies raw course poses once for the entire tank. These
 // states are transient: only the rigid body / swimmer is displaced; the
 // swimmer's detached bubbles keep their own positions in tank coordinates.
@@ -172,6 +223,7 @@ export function createToyContacts(axes, measure, residentHull) {
       let body=residents.get(a);
       if (!body) { body=hull(axes.length); residents.set(a,body); }
       residentHull(a,seconds,body);
+      body.velocity=a.velocity;
       animalBodies.push(body);
     }
     // A toy must see its neighbours even if they have yet to take their
@@ -182,7 +234,7 @@ export function createToyContacts(axes, measure, residentHull) {
       const body=swimmer ?? model, course=body.position;
       let track=tracks.get(model), restored=false;
       if (!track) {
-        track={shape:hull(axes.length),occupied:hull(axes.length),position:course.clone(),goal:course.clone(),time:seconds};
+        track={shape:hull(axes.length),occupied:hull(axes.length),position:course.clone(),goal:course.clone(),velocity:new Vector3(),time:seconds};
         // Save only the joints that move. A swimmer may need to shorten a
         // stroke or wait for a neighbouring toy to drift out of its way.
         track.joints=[];
@@ -212,6 +264,7 @@ export function createToyContacts(axes, measure, residentHull) {
       }
       measure(model,shape);
       anchor.copy(position);
+      courseVelocity.subVectors(course,track.goal);
       oldOffset.subVectors(position,track.goal);
       target.copy(course).addScaledVector(oldOffset,Math.exp(-1.25*dt));
       track.goal.copy(course);
@@ -219,19 +272,58 @@ export function createToyContacts(axes, measure, residentHull) {
         const travel=(kind==='author' ? 1.3 : .7)*dt+.002;
         // A continuous move can finish only near its last pose. Keep all
         // solids in that neighbourhood, including room for joint rotation.
-        const solids=continuous ? furniture.filter(s=>nearSegment(shape,position,target,s,travel+.3)) : [...furniture];
+        const solids=continuous ? furniture.filter(s=>nearSegment(shape,position,target,s,travel+.65)) : [...furniture];
+        const firstAnimal=solids.length;
         solids.push(...animalBodies);
         for (const [other,obstacle] of neighbours.entries()) if (other!==index && obstacle) solids.push(obstacle);
+        const submerged=continuous && !TOYS[kind].surface;
+        const acceleration=kind==='author' ? 1.5 : .65;
+        if (submerged) {
+          courseVelocity.divideScalar(dt);
+          desiredVelocity.copy(oldOffset).multiplyScalar(-1.25).clampLength(0,.08+courseVelocity.length()*.7).add(courseVelocity);
+          const maxSpeed=kind==='author' ? 1.05 : .60;
+          desiredVelocity.clampLength(0,maxSpeed);
+          steer(axes,position,shape,solids,desiredVelocity,courseVelocity);
+          desiredVelocity.clampLength(0,maxSpeed);
+          if (kind==='diver' && Number.isFinite(flowSeconds) && track.flow===flowSeconds) {
+            // The pumps stopped. Hold the last drift position until the
+            // current resumes, while still responding to physical contact.
+            track.velocity.set(0,0,0);
+            desiredVelocity.set(0,0,0);
+          }
+          desiredVelocity.sub(track.velocity).clampLength(0,acceleration*dt).add(track.velocity);
+          coast.copy(position).addScaledVector(track.velocity,dt);
+          target.copy(position).addScaledVector(desiredVelocity,dt);
+          // Residents already swim around the individual limbs and helmet.
+          // An animal between fins can overlap the overall toy hull for
+          // seconds. Sweep the nearby body sections, using the same bounds
+          // that steer the residents themselves.
+          solids.splice(firstAnimal,animalBodies.length);
+          for (const animal of animalBodies) addSectionPairs(solids,shape,position,target,animal,travel+.3);
+        }
         if (TOYS[kind].surface) position.y = course.y;
         contain(position,shape,kind,level,course.y);
         separate(axes,position,shape,solids,kind,level,course.y);
         slide(axes,position,shape,target,solids,kind,level,course.y);
-        if (continuous && position.distanceToSquared(anchor)>travel*travel) {
-          // The nearest unrestricted exit can be on the far side of several
-          // neighbours. Limit travel and shorten the requested pose in place.
-          // At fraction zero the previous joints and previously occupied
-          // space remain available while the other toys finish their sweeps.
-          nearGoal.subVectors(position,anchor).clampLength(0,travel-.0001).add(anchor);
+        // A kick can expand the body into a nearby obstacle. If the exit
+        // would jerk the root away, first try to keep drifting with a shorter
+        // stroke. Only an unavoidable moving contact may exceed this budget.
+        const turnDistance=acceleration*dt*dt;
+        const jerked=submerged && position.distanceToSquared(coast)>turnDistance**2+1e-10;
+        if (continuous && (jerked || position.distanceToSquared(anchor)>travel*travel)) {
+          if (submerged) nearGoal.subVectors(position,coast).clampLength(0,turnDistance).add(coast);
+          else nearGoal.copy(position);
+          nearGoal.sub(anchor).clampLength(0,Math.max(0,travel-.0001)).add(anchor);
+          if (submerged) {
+            // A leaf between the snorkel and the legs can otherwise force
+            // every joint to wait for a body-length exit from empty space.
+            const staticBodies=solids.splice(0,firstAnimal);
+            for (const solid of staticBodies) addSectionPairs(solids,shape,anchor,nearGoal,solid,travel+.3);
+          }
+          const reference=submerged ? coast : anchor;
+          let best=position.distanceToSquared(anchor)<=travel*travel ? position.distanceToSquared(reference) : Infinity;
+          let fractionUsed=1;
+          bestPosition.copy(position);
           for (const fraction of [1,.5,0]) {
             if (fraction!==1) {
               for (const {node,previous,wanted} of track.joints) node.quaternion.slerpQuaternions(previous,wanted,fraction);
@@ -242,9 +334,17 @@ export function createToyContacts(axes, measure, residentHull) {
             separate(axes,position,shape,solids,kind,level,course.y);
             target.copy(nearGoal);
             slide(axes,position,shape,target,solids,kind,level,course.y);
-            if (position.distanceToSquared(anchor)<=travel*travel) break;
-            if (fraction===0) position.copy(anchor);
+            if (position.distanceToSquared(anchor)>travel*travel) continue;
+            const distance=position.distanceToSquared(reference);
+            if (distance<best) {
+              best=distance; fractionUsed=fraction; bestPosition.copy(position);
+            }
+            if (!submerged || distance<=turnDistance**2+1e-10) break;
           }
+          if (Number.isFinite(best)) position.copy(bestPosition);
+          else { fractionUsed=0; position.copy(anchor); }
+          for (const {node,previous,wanted} of track.joints) node.quaternion.slerpQuaternions(previous,wanted,fractionUsed);
+          measure(model,shape);
         }
         // Settle a deflected float on the wave at its new location. If a
         // neighbouring body supports it, keep that contact's draft and tilt.
@@ -266,8 +366,11 @@ export function createToyContacts(axes, measure, residentHull) {
         const d=axes[i].dot(position), lo=shape.lo[i]+d, hi=shape.hi[i]+d;
         occupied.lo[i]=lo; occupied.hi[i]=hi;
       }
+      occupied.velocity=track.velocity;
       neighbours[index]=occupied;
-      track.time=seconds;
+      if (continuous) track.velocity.subVectors(position,anchor).divideScalar(dt);
+      else track.velocity.set(0,0,0);
+      track.time=seconds; track.flow=flowSeconds;
       body.position.copy(position);
     }
   }

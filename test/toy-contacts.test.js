@@ -105,6 +105,62 @@ test('real divers and swimmers on intersecting courses stay apart throughout the
   assert.ok(maxJump<.09,'no body-length correction within one tick: '+maxJump);
 });
 
+test('the swimmer and copper diver keep moving smoothly through repeated close passes', t => {
+  t.mock.method(TextureLoader.prototype,'load',() => new Texture());
+  const manager=new LoadingManager(), rocks=createHardscape(manager), world=createSceneCollisions();
+  rocks.update(createInitialState().hardscape);
+  const author=createAuthorDisplay(createAuthorSwimmer(manager),animateAuthorSwimmer,0,level,rocks.driftFloor);
+  const diver=createToyModel('diver',undefined,manager), toy={kind:'diver',slot:0};
+  author.userData.toyKind='author'; diver.userData.toyKind='diver';
+  const actor=author.userData.author, bodies=[actor.swimmer,diver];
+  const tracks=bodies.map(()=>({previous:new Vector3(),velocity:new Vector3(),worstKick:0,distance:0}));
+  const fps=30;
+  let atSurface=false, releasedBubble=false;
+  for (let frame=0;frame<=fps*65;frame++) {
+    const time=frame/fps;
+    actor.prepare(time,rocks.revision);
+    poseToy(diver,toy,time,level,rocks.driftFloor);
+    world.arrangeToys(rocks.solids,[author,diver],null,[],time,level,time);
+    actor.finish(time);
+    const stats=actor.diagnostics();
+    atSurface ||= stats.surfacing>.99 && stats.snorkelTip.y>level;
+    releasedBubble ||= stats.bubbles.some(b=>b.y>stats.mouth.y+.25);
+    for (const [i,body] of bodies.entries()) {
+      const track=tracks[i], velocity=body.position.clone().sub(track.previous).multiplyScalar(fps);
+      if (frame>1) {
+        track.worstKick=Math.max(track.worstKick,track.velocity.distanceTo(velocity)*fps);
+        track.distance+=velocity.length()/fps;
+      }
+      track.previous.copy(body.position); track.velocity.copy(velocity);
+    }
+  }
+  assert.ok(atSurface && releasedBubble,'the corrected swimming pose still reaches air and leaves a detached bubble trail');
+  for (const [i,{distance,worstKick}] of tracks.entries()) {
+    assert.ok(distance>(i===0?18:5),'each body continues through its turns');
+    assert.ok(worstKick<(i===0?6:3),'abrupt acceleration on '+(i===0?'author':'diver')+': '+worstKick);
+  }
+});
+
+test('the contact-corrected copper diver stops with the current and restarts smoothly', t => {
+  t.mock.method(TextureLoader.prototype,'load',() => new Texture());
+  const world=createSceneCollisions(), diver=createToyModel('diver',undefined,new LoadingManager());
+  diver.userData.toyKind='diver';
+  const scenery=[], toy={kind:'diver',slot:0}, dt=1/60;
+  function step(time, flow) {
+    poseToy(diver,toy,flow,level,substrateHeight);
+    world.arrangeToys(scenery,[diver],null,[],time,level,flow);
+  }
+  for (let i=0;i<=60;i++) step(i*dt,i*dt);
+  const stopped=diver.position.clone();
+  for (let i=61;i<=120;i++) {
+    step(i*dt,1);
+    assert.ok(diver.position.distanceTo(stopped)<1e-9);
+  }
+  step(121*dt,1+dt);
+  const firstStep=diver.position.distanceTo(stopped);
+  assert.ok(firstStep>0 && firstStep<dt*dt);
+});
+
 test('a solid toy clears the sway of tall leaves; both plant removal and a long background gap reopen its route', () => {
   const world=createSceneCollisions(), diver=block('diver'), rocks=[];
   const leaves=scanSolids(new BoxGeometry(.02,2,.5).translate(0,2,0));
@@ -146,4 +202,27 @@ test('a contact-corrected swimmer reloads with its actual mouth, snorkel and det
   createSceneCollisions().arrangeToys(rock,[reopened],null,[],1.2,level);
   loaded.finish(1.2);
   assert.deepEqual(loaded.diagnostics(),actor.diagnostics());
+});
+
+test('a zebra danio alongside a tilted fin does not pin the drifting toy', () => {
+  const world = createSceneCollisions(), scenery = [], diver = new Group();
+  diver.userData.toyKind = 'diver';
+  diver.add(new Mesh(new BoxGeometry(.70,.016,.065).rotateZ(Math.PI/4)));
+  const fish = {species:'zebra', alive:true, size:.35, position:{x:0,y:2.2,z:0}, velocity:{x:.18,y:0,z:0}};
+  let previousX;
+  for (let frame=0; frame<=100; frame++) {
+    const time = frame/60;
+    const x = .18*(time-1);
+    diver.position.set(x,2,0);
+    fish.position.x = x;
+    // For the last 40 frames the fish travels through the empty corner
+    // above the blade, inside its axis-aligned bounding box.
+    world.arrangeToys(scenery,[diver],null,frame>60 ? [fish] : [],time,level,time);
+    if (frame>60) {
+      assert.ok(diver.position.x-previousX > .08/60, 'the fin continues to drift past the fish');
+      world.update(scenery,[diver],false);
+      assert.equal(world.overlaps(makeResidentBox(fish,time)),false);
+    }
+    previousX = diver.position.x;
+  }
 });

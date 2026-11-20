@@ -471,22 +471,45 @@ export function createSceneCollisions(equipment = []) {
     const body=model.userData.author?.swimmer ?? model;
     body.updateWorldMatrix(true,true);
     shape.lo.fill(Infinity); shape.hi.fill(-Infinity);
-    for (const {node,center,half} of partsFor(model)) {
+    const parts=partsFor(model);
+    shape.sections ??= parts.map(part=>{
+      const coarse=volume(), fine=volume();
+      coarse.fitted=()=>{
+        if (!part.vertices.length) return coarse;
+        if (!coarse.ready) {
+          fine.lo.fill(Infinity); fine.hi.fill(-Infinity);
+          for (const v of part.vertices)
+            expand(fine,point.copy(v).applyMatrix4(part.node.matrixWorld).sub(body.position));
+          coarse.ready=true;
+        }
+        return fine;
+      };
+      return coarse;
+    });
+    for (const [partIndex,{node,center,half}] of parts.entries()) {
+      const section=shape.sections[partIndex];
+      section.ready=false;
       point.copy(center).applyMatrix4(node.matrixWorld).sub(body.position);
       const e=node.matrixWorld.elements;
       for (let i=0;i<axes.length;i++) {
         const n=axes[i], c=n.dot(point);
         const r=half.x*Math.abs(n.x*e[0]+n.y*e[1]+n.z*e[2]) + half.y*Math.abs(n.x*e[4]+n.y*e[5]+n.z*e[6])
           + half.z*Math.abs(n.x*e[8]+n.y*e[9]+n.z*e[10]);
-        shape.lo[i]=Math.min(shape.lo[i],c-r); shape.hi[i]=Math.max(shape.hi[i],c+r);
+        section.lo[i]=c-r; section.hi[i]=c+r;
+        shape.lo[i]=Math.min(shape.lo[i],section.lo[i]); shape.hi[i]=Math.max(shape.hi[i],section.hi[i]);
       }
     }
   }
   function measureResident(animal,seconds,hull) {
     const shape=residentShape(makeResidentBox(animal,seconds));
+    if (shape.sections && !hull.sections) hull.sections=shape.sections.map(volume);
     for (let i=0;i<axes.length;i++) {
       const c=axes[i].dot(animal.position);
       hull.lo[i]=shape.lo[i]+c; hull.hi[i]=shape.hi[i]+c;
+      for (let j=0;j<(shape.sections?.length ?? 0);j++) {
+        hull.sections[j].lo[i]=shape.sections[j].lo[i]+c;
+        hull.sections[j].hi[i]=shape.sections[j].hi[i]+c;
+      }
     }
   }
   const toyContacts=createToyContacts(axes,measureToy,measureResident);

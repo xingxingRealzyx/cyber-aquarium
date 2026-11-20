@@ -1,7 +1,7 @@
 {
   "name": "cyber-aquarium",
   "productName": "Cyber Aquarium",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "澄境 · A living transparent desktop freshwater aquarium",
   "private": true,
   "type": "module",

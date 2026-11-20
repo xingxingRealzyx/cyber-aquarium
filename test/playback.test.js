@@ -73,6 +73,21 @@ test('a stalled frame resumes a short stroke without a deferred burst on the nex
   closeTo(tank.behaviorSeconds, stalled + 4/60);
 });
 
+test('after a long fast-forward each visible frame ends at its last swept toy pose', () => {
+  const tank = createInitialState();
+  tank.animals = [];
+  tank.speed = 4;
+  tank.behaviorSeconds = tank.currentSeconds = 1e9;
+  let sceneryTime;
+  for (const fps of [60, 30, 120]) {
+    advancePlayback(tank, 1/fps, (state, dt) => {
+      sceneryTime = state.behaviorSeconds + dt;
+    });
+    assert.equal(tank.behaviorSeconds, sceneryTime);
+    assert.equal(tank.currentSeconds, sceneryTime);
+  }
+});
+
 test('pausing arrests both clocks and switching back from fast-forward adds no catch-up movement', () => {
   const original = createInitialState();
   original.speed = 3600;

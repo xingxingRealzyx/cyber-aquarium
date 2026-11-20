@@ -186,7 +186,6 @@ function escapeTarget(a, author) {
 }
 
 function step(state,dt,scene) {
-  state.behaviorSeconds=(state.behaviorSeconds||0)+dt;
   const time=state.behaviorSeconds;
   sinkFood(state,dt);
   const reserved=new Set();
@@ -332,13 +331,18 @@ function step(state,dt,scene) {
 export function advanceBehavior(state,motionSeconds,scene) {
   if(state.paused||!Number.isFinite(motionSeconds)||motionSeconds<=0)return state;
   state.foodPellets ||= [];
-  let remaining=Math.min(motionSeconds,30);
+  const start = state.behaviorSeconds ?? 0;
+  const duration = Math.min(motionSeconds,30);
   const flow = (state.equipment?.filter !== false ? .78 : 0) + (state.equipment?.aerator !== false ? .22 : 0);
-  state.currentSeconds = (state.currentSeconds ?? state.behaviorSeconds ?? 0) + remaining * flow;
-  while (remaining > 1e-9) {
-    const dt = residentContactStep(state.animals, Math.min(1 / 30, remaining));
-    step(state, dt, scene);
+  state.currentSeconds = (state.currentSeconds ?? start) + duration * flow;
+  let remaining = duration;
+  while (remaining > 0) {
+    let dt = residentContactStep(state.animals, Math.min(1 / 30, remaining));
+    if (remaining - dt < 1e-9) dt = remaining;
     remaining -= dt;
+    // Match the endpoint used to pose the toys, also after long fast-forwards.
+    state.behaviorSeconds = start + (duration - remaining);
+    step(state, dt, scene);
   }
   return state;
 }
