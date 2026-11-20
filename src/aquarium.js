@@ -394,6 +394,8 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
   }
 
   function update(state,deltaSeconds,elapsedSeconds,motionDt=deltaSeconds,still=false){
+    const followed = desktopView.followedId && state.animals.find(a=>a.id===desktopView.followedId);
+    if (desktopView.advanceFollow(followed?.alive ? followed.position : null,deltaSeconds)) viewDirty=true;
     controls.autoRotate=autoOrbit && !still;
     controls.update(deltaSeconds);
     if (still && lastStillFrame===state && !viewDirty && texturesReady && decoded &&
@@ -447,7 +449,11 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
         model.userData.positionInitialized=false;
         model.userData.orientationInitialized=false;
       }
-      if (fish) animateFish(model,animal,step,swimSpeed,decay);
+      if (fish) {
+        const food = animal.behavior === 'seeking' && animal.targetFoodId
+          ? state.foodPellets?.find(pellet => pellet.id === animal.targetFoodId) : null;
+        animateFish(model,animal,step,swimSpeed,decay,t,food);
+      }
       else if (alive) {
         const graze = animal.behavior === 'grazing' || animal.behavior === 'eating';
         const animate = animal.species === 'shrimp' ? animateShrimp : animateSnail;
@@ -542,5 +548,6 @@ export function createAquarium(container, { onSelect = () => {}, onStats = () =>
     broodDisplay.dispose();
     disposeObject(scene);disposeGrazerMaps(sceneryLoader);waterLight.dispose();keyLight.shadow.dispose();environment.dispose();renderer.dispose();renderer.domElement.remove();
   }
-  return {update,prepareCollisions,saveToyPoses,resize,resetView,setDesktopLayout:desktopView.setLayout,setAutoRotate:(value)=>{autoOrbit=Boolean(value);},setQuality,dispose,renderer,camera,controls,hitTest,setSelectedAnimal,getAnimalScreenPositions,getBroodScreenPositions,getToyScreenPositions};
+  return {update,prepareCollisions,saveToyPoses,resize,resetView,setDesktopLayout:desktopView.setLayout,setAutoRotate:(value)=>{autoOrbit=Boolean(value);},setQuality,dispose,renderer,camera,controls,hitTest,setSelectedAnimal,getAnimalScreenPositions,getBroodScreenPositions,getToyScreenPositions,
+    followAnimal: desktopView.followAnimal, get followedId() { return desktopView.followedId; }};
 }

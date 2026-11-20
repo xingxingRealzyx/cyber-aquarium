@@ -1,3 +1,4 @@
+import { drawFood, mouthAtFood } from './fish-feeding.js';
 import { animalTurnRate, fallingPosition, pelletFallSpeed, sinkFood } from './behavior.js';
 import { feedingRoute } from './feeding-route.js';
 import { consumePellet, isSettledPellet, SPECIES, substrateHeight } from './simulation.js';
@@ -16,13 +17,9 @@ function feedingSpeed(a, fish) {
 function approachPoint(a, p, fish, speed) {
   const floor=substrateHeight(p.x,p.z);
   if (fish) {
-    const lower=Math.max(.72,floor+.24);
-    if (p.y<lower) return null;
-    // Lead a falling grain without chasing it below swimming depth.
-    const time=Math.max(0,distance(a.position,p)-.20)/speed;
-    const aim=fallingPosition(p,time);
-    if (aim.y+.24<lower) return null;
-    return {...aim,y:Math.max(lower,aim.y)};
+    if (isSettledPellet(p)) return p;
+    const time=(heading(a,p,true)?.turn ?? 0)+Math.max(0,distance(a.position,p)-.25*(a.size??1))/speed;
+    return fallingPosition(p,time);
   }
   if (p.y<=floor+.18) return p;
   if (!p.fastSinking || Math.hypot(p.x-a.position.x,p.z-a.position.z)>1.2) return null;
@@ -30,7 +27,8 @@ function approachPoint(a, p, fish, speed) {
 }
 
 function inReach(a,p,fish,scene) {
-  return distance(a.position,p)<=.29999 && (fish ? p.y>=Math.max(.72,substrateHeight(p.x,p.z)+.24) : p.y<=substrateHeight(p.x,p.z)+.18) &&
+  if (fish) return !!mouthAtFood(a,p,scene);
+  return distance(a.position,p)<=.29999 && p.y<=substrateHeight(p.x,p.z)+.18 &&
     scene?.canGrazeFrom?.(a,p)!==false && !scene?.blocksFood?.(p);
 }
 
@@ -39,8 +37,7 @@ function findPlan(state,a,fish,speed,scene,available,reserved,search,grazeable) 
   const revision=scene?.revision;
   if (old && old.scene===scene && old.revision===revision && Math.abs(old.size-a.size)<.035 &&
       distance(a.position,old.position)<.01) {
-    if (old.food && available.has(old.food) && !reserved.has(old.food) && now<old.expires &&
-        (!fish || old.food.y>=Math.max(.72,substrateHeight(old.food.x,old.food.z)+.24))) return old;
+    if (old.food && available.has(old.food) && !reserved.has(old.food) && now<old.expires) return old;
     if (!old.food && old.grazeable===grazeable && old.count===available.size && old.first===state.foodPellets[0] &&
         old.last===state.foodPellets.at(-1) && now<old.expires) return null;
   }
@@ -101,7 +98,7 @@ function findPlan(state,a,fish,speed,scene,available,reserved,search,grazeable) 
 
 function heading(a,point,fish) {
   const p=a.position;
-  const dx=point.x-p.x, dy=fish ? point.y-p.y : 0, dz=point.z-p.z;
+  const dx=point.face?.x ?? point.x-p.x, dy=fish ? point.face?.y ?? point.y-p.y : 0, dz=point.face?.z ?? point.z-p.z;
   const length=Math.hypot(dx,dy,dz);
   if (length<epsilon) return null;
   const yaw=Math.atan2(dz,dx), pitch=Math.atan2(dy,Math.hypot(dx,dz));
@@ -117,10 +114,10 @@ function walk(intent,dt) {
   const {a,fish,speed,plan,point,direction}=intent;
   if (!direction) return;
   const d=direction;
-  if (point.descend && !intent.atMouth) {
-    const depth=Math.min(a.position.y-point.y,dt*speed);
-    a.position.y-=depth;
-    if (a.position.y<=point.y+epsilon) plan.index++;
+  if ((point.descend || point.rise) && !intent.atMouth) {
+    const dy=point.y-a.position.y;
+    a.position.y+=Math.sign(dy)*Math.min(Math.abs(dy),dt*speed);
+    if (Math.abs(a.position.y-point.y)<epsilon) plan.index++;
     Object.assign(plan.position,a.position);
     return;
   }
@@ -128,6 +125,10 @@ function walk(intent,dt) {
   const yaw=fraction===1 ? d.yaw : d.previousYaw+d.yawDelta*fraction;
   const pitch=fraction===1 ? d.pitch : d.previousPitch+d.pitchDelta*fraction;
   Object.assign(a.velocity,{x:speed*Math.cos(pitch)*Math.cos(yaw),y:speed*Math.sin(pitch),z:speed*Math.cos(pitch)*Math.sin(yaw)});
+  if (point.face) {
+    if (dt>=d.turn-epsilon) plan.index++;
+    return;
+  }
   if (intent.atMouth || dt<=d.turn) return;
   const travel=Math.min(1,(dt-d.turn)*speed/d.length);
   const p=a.position;
@@ -204,14 +205,14 @@ export function advanceFastFeeding(state,seconds,scene,onElapsed) {
       // A feeding animal already facing the grain can bite without another
       // body turn. This matters inside a narrow gap between two rocks.
       const v=a.velocity, p=a.position;
-      const aligned=atMouth && (Math.hypot(v.x,v.y,v.z)<=.03 ||
+      const aligned=atMouth && (fish || Math.hypot(v.x,v.y,v.z)<=.03 ||
         (food.x-p.x)*v.x+(food.y-p.y)*v.y+(food.z-p.z)*v.z>=-.01);
       const direction=point && !aligned ? heading(a,point,fish) : null;
-      const turn=point?.descend ? 0 : direction?.turn ?? 0;
+      const turn=point?.descend || point?.rise ? 0 : direction?.turn ?? 0;
       if (atMouth) {
-        dt=Math.min(dt,Math.max(.001,a.biteCooldown,turn));
+        dt=Math.min(dt,Math.max(fish ? .055 : .001,a.biteCooldown,turn));
       } else if (direction) {
-        dt=Math.min(dt,Math.max(.001,turn+direction.length/speed));
+        dt=Math.min(dt,Math.max(.001,turn+(point.face ? 0 : direction.length/speed)));
       }
       // A fish with a computed interception swims to that point in one
       // leg. Re-evaluate a missed interception when it arrives rather than
@@ -230,7 +231,9 @@ export function advanceFastFeeding(state,seconds,scene,onElapsed) {
     for (const intent of intents) walk(intent,dt);
     elapse(state,dt,onElapsed);
     for (const {a,fish,plan} of intents) {
-      if (a.alive && a.hunger>=8 && !a.biteCooldown && plan.food.mass>1e-10 && inReach(a,plan.food,fish,scene)) consumePellet(state,a.id,plan.food.id,scene);
+      if (!a.alive || a.hunger<8 || a.biteCooldown>epsilon || plan.food.mass<=1e-10 || !inReach(a,plan.food,fish,scene)) continue;
+      if (fish) drawFood(a,plan.food,Math.min(dt,.055),scene);
+      consumePellet(state,a.id,plan.food.id,scene);
     }
     remaining-=dt;
   }

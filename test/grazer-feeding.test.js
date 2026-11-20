@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { BoxGeometry } from 'three';
+import { fishMouth } from '../src/fish-feeding.js';
 import { advanceBehavior } from '../src/behavior.js';
 import { advancePlayback } from '../src/playback.js';
 import { createSceneCollisions, scanSolids } from '../src/scene-collisions.js';
@@ -102,7 +103,9 @@ test('a fish can intercept a descending grain that a shrimp is waiting for below
   const {tank,animal} = hungryGrazer('shrimp',0,0);
   const fish = createInitialState().animals[0];
   const pellet = {...settledPellet('sinking',0,0), y:1.85, fastSinking:true};
-  Object.assign(fish,{hunger:75,position:{x:-.04,y:pellet.y,z:0},velocity:{x:.2,y:0,z:0}});
+  Object.assign(fish,{hunger:75,position:{x:0,y:pellet.y,z:0},velocity:{x:.2,y:0,z:0}});
+  const lips=fishMouth(fish);
+  fish.position.x+=pellet.x-lips.x;fish.position.y+=pellet.y-lips.y;
   tank.animals.push(fish);
   tank.foodPellets = [pellet];
   tank.food = pellet.mass;

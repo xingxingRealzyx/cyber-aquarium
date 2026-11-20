@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { advanceBehavior } from '../src/behavior.js';
+import { fishMouth } from '../src/fish-feeding.js';
 import {
   addAnimal, advanceSimulation, animalLifeStage, consumePellet, corpseDecay, createInitialState, feed,
   fishLifeStage, relativeAdultSize, removeAnimal, removeDead, restoreState, SPECIES,
@@ -122,10 +123,11 @@ test('a fed juvenile gains size and mass, and resumes growing from its saved sta
   const original = { size: fish.size, mass: fish.mass, age: fish.lifeAgeHours };
   assert.equal(fishLifeStage(fish), 'juvenile');
   fish.hunger = 55;
-  fish.velocity = { x: 0, y: 0, z: 0 };
+  fish.velocity = { x: .3, y: 0, z: 0 };
   feed(tank);
   const pellet = tank.foodPellets[0];
-  fish.position = { x: pellet.x, y: pellet.y, z: pellet.z };
+  const snout = fishMouth(fish, { x: 0, y: 0, z: 0 });
+  fish.position = { x: pellet.x - snout.x, y: pellet.y - snout.y, z: pellet.z - snout.z };
   assert.ok(consumePellet(tank, fish.id, pellet.id).ok);
   advanceSimulation(tank, 12);
   advanceSimulation(unfed, 12);

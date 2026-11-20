@@ -1,9 +1,12 @@
+import { mouthAtFood } from './fish-feeding.js';
 import { INFECTIONS, createInfectionClock, restoreInfectionClock, restoreInfection, startScheduledInfection, advanceInfection } from './fish-health.js';
 import { advanceReproduction, availableAnimalSlots, MAX_ANIMALS, removeAttachedBroods, restoreBroods } from './reproduction.js';
 import { restorePlayBout } from './fish-play.js';
+import { restoreSchoolAlarm } from './schooling.js';
 
 export { INFECTIONS };
 export { availableAnimalSlots };
+export const BITE_DURATION_SECONDS = .45;
 
 /** Freshwater ecosystem model. Nitrogen concentrations are mg N/L, time is hours. */
 export const SPECIES = Object.freeze({
@@ -311,19 +314,22 @@ export function consumePellet(state, animalId, pelletId, scene) {
   const a = state.animals.find(item => item.id === animalId);
   const p = state.foodPellets?.find(item => item.id === pelletId);
   if (state.paused || !a?.alive || !p || a.hunger < 8 || a.biteCooldown > 0 || !a.position) return { ok: false, grams: 0 };
-  const dx = p.x - a.position.x, dy = p.y - a.position.y, dz = p.z - a.position.z;
-  if (Math.hypot(dx,dy,dz) > .30) return { ok: false, grams: 0 };
-  const v = a.velocity || {x:0,y:0,z:0};
-  if (Math.hypot(v.x,v.y,v.z) > .03 && dx*v.x + dy*v.y + dz*v.z < -.01) return { ok: false, grams: 0 };
-  if (SPECIES[a.species].type === 'invertebrate' && p.y > substrateHeight(p.x,p.z)+.18) return { ok: false, grams: 0 };
-  if (scene?.canGrazeFrom?.(a,p) === false) return { ok: false, grams: 0 };
+  if (SPECIES[a.species].type === 'fish') {
+    if (!mouthAtFood(a,p,scene,true)) return {ok:false,grams:0};
+  } else {
+    const dx=p.x-a.position.x,dy=p.y-a.position.y,dz=p.z-a.position.z;
+    const v=a.velocity ?? {x:0,y:0,z:0};
+    if (Math.hypot(dx,dy,dz)>.30 || p.y>substrateHeight(p.x,p.z)+.18 ||
+        (Math.hypot(v.x,v.y,v.z)>.03 && dx*v.x+dy*v.y+dz*v.z<-.01) ||
+        scene?.canGrazeFrom?.(a,p)===false) return {ok:false,grams:0};
+  }
   const mass = a.mass || SPECIES[a.species].mass;
   const amount = Math.min(p.mass, mass * .0045, mass * .02 * (a.hunger - 2) / 85);
   if (!(amount > 0)) return { ok: false, grams: 0 };
   p.mass -= amount;
   a.hunger = Math.max(2, a.hunger - amount / (mass * .02) * 85);
   a.lastMealHours = state.elapsedHours; a.totalEatenGrams += amount; a.bites += 1;
-  a.biteFlash = .45; a.biteCooldown = .8; a.behavior = 'eating';
+  a.biteFlash = BITE_DURATION_SECONDS; a.biteCooldown = .8; a.behavior = 'eating';
   // Approximate feed nitrogen: 55% excreted, 35% solid waste, 10% retained.
   state.water.ammonia += amount * 70 / state.volumeLiters * .55;
   state.detritus += amount * .35;
@@ -814,12 +820,15 @@ export function restoreState(raw) {
           ? coordinate : numeric(coordinate, restored.position[axis], min, max);
       }
       for (const axis of ['x','y','z']) restored.velocity[axis] = numeric(a.velocity?.[axis],restored.velocity[axis],-4,4);
+      const alarm = fish && restored.alive && restoreSchoolAlarm(a.schoolAlarm,base.behaviorSeconds);
+      if (alarm) restored.schoolAlarm=alarm;
       const behaviors = ['swimming','seeking','eating','resting','gasping','grazing','schooling','chasing','darting','evading'];
+      if (alarm) behaviors.push('startled','regrouping');
       restored.behavior = restored.alive && behaviors.includes(a.behavior) ? a.behavior : restored.alive ? restored.behavior : 'dead';
       restored.lastMealHours = a.lastMealHours == null ? null : numeric(a.lastMealHours,null,0,base.elapsedHours);
       restored.totalEatenGrams = numeric(a.totalEatenGrams,0,0,1e4);
       restored.bites = Math.round(numeric(a.bites,0,0,1e9));
-      restored.biteFlash = numeric(a.biteFlash,0,0,.45);
+      restored.biteFlash = numeric(a.biteFlash,0,0,BITE_DURATION_SECONDS);
       restored.biteCooldown = numeric(a.biteCooldown,0,0,.8);
 
       restored.deathHours = restored.alive ? null : numeric(a.deathHours, base.elapsedHours, 0, base.elapsedHours);

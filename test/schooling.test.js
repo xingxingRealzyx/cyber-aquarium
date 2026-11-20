@@ -3,7 +3,7 @@ import test from 'node:test';
 import { Vector3 } from 'three';
 import { advanceBehavior } from '../src/behavior.js';
 import { applySchoolSteering, sampleFish } from '../src/schooling.js';
-import { createInitialState, SPECIES } from '../src/simulation.js';
+import { createInitialState, restoreState, SPECIES, substrateHeight } from '../src/simulation.js';
 
 function pair(species = 'neon') {
   const tank = createInitialState();
@@ -101,6 +101,23 @@ test('tightly spaced fish open a gap even when swimming in the same direction', 
     advanceBehavior(tank, .9);
     assert.ok(second.position.z - first.position.z > .2, species + ' pair should separate');
   }
+});
+
+test('a fish braking over bottom food can finish beside a neighbour', () => {
+  const { animals }=pair(), [fish, neighbour]=animals;
+  const floor=substrateHeight(fish.position.x,fish.position.z);
+  function sideways(height, gap, feeding) {
+    fish.position.y=floor+height;
+    neighbour.position={...fish.position,z:fish.position.z+gap};
+    const goal={x:.03,y:-.01,z:0};
+    applySchoolSteering(fish,sampleFish(animals),goal,1.6,0,feeding);
+    return Math.abs(goal.z);
+  }
+  assert.ok(sideways(1.5,.55,true)>.05, 'water-column pursuit leaves room to turn');
+  assert.ok(sideways(.25,.55,false)>.05, 'ordinary bottom cruising keeps its spacing');
+  assert.equal(sideways(.25,.55,true),0, 'two separate feeding lanes fit over the sand');
+  const close=sideways(.25,.18,true);
+  assert.ok(close>0 && close<.03, 'nearer fins still steer apart at the pace of the last stroke');
 });
 
 test('adult fish make room before a neighbour reaches their fins', () => {
@@ -211,4 +228,62 @@ test('a fish bends its path less for a leaf than a solid and can still reach foo
   assert.ok(leaves.offset > open.offset + .01);
   assert.ok(solid.offset > leaves.offset + .1);
   assert.ok(leaves.bites > 0);
+});
+
+test('a brief sighting travels in delayed, weakening steps through a school and dies out', () => {
+  const tank=pair(), template=tank.animals[0];
+  tank.animals=[-2.65,-1.55,-.45,.65,-1.55,2.9].map((x,i)=>({
+    ...structuredClone(template), id:'alarm-'+i, serial:i+1, species:i===4?'guppy':'neon',
+    seed:.2+.035*i, size:.5, position:{x,y:i===5?3.2:2.3,z:i===4?.82:i===5?1.3:0},
+    velocity:{x:.35,y:0,z:0},
+  }));
+  const first=tank.animals[0], scene={
+    avoid:a=>a===first && tank.behaviorSeconds<.14 ? {author:{x:0,y:0,z:1,distance:.54}} : {},
+  };
+  const alarms=new Map(), recovered=new Set();
+  for (let frame=0;frame<180;frame++) {
+    advanceBehavior(tank,1/30,scene);
+    for (const a of tank.animals) {
+      if (a.schoolAlarm && !alarms.has(a.id)) alarms.set(a.id,{...a.schoolAlarm});
+      if (a.behavior==='regrouping') recovered.add(a.id);
+    }
+    if (frame===23) {
+      const [lead,second,third]=tank.animals;
+      assert.ok(second.velocity.z>.3 && third.velocity.z>.06,'followers turn in the escape direction');
+      const frozen=JSON.stringify(tank.animals.map(a=>a.schoolAlarm));
+      tank.paused=true;
+      advanceBehavior(tank,2,scene);
+      assert.equal(JSON.stringify(tank.animals.map(a=>a.schoolAlarm)),frozen);
+      const saved=restoreState(JSON.stringify(tank));
+      for (const a of [lead,second,third]) {
+        const restored=saved.animals.find(other=>other.id===a.id);
+        assert.deepEqual(restored.schoolAlarm,a.schoolAlarm);
+        assert.equal(restored.behavior,a.behavior);
+      }
+      tank.paused=false;
+    }
+  }
+  const [lead,second,third]=[...alarms.values()];
+  assert.deepEqual([...alarms.keys()],['alarm-0','alarm-1','alarm-2'],
+    'a third hop, a different species and a distant fish remain uninvolved');
+  assert.deepEqual([lead.hops,second.hops,third.hops],[0,1,2]);
+  assert.ok(second.started>lead.started+.15 && third.started>second.started+.15);
+  assert.ok(lead.strength>second.strength && second.strength>third.strength);
+  assert.deepEqual(recovered,new Set(alarms.keys()));
+  assert.ok(tank.animals.every(a=>!a.schoolAlarm),'neighbours cannot keep one another in an alarm loop');
+});
+
+test('a separated fish can rejoin its own school from beyond ordinary following distance', () => {
+  const tank=pair(), [a,b]=tank.animals;
+  a.position={x:0,y:2.3,z:-1.25}; b.position={x:0,y:2.3,z:1.25};
+  function steer(regroup) {
+    const goal={...a.velocity};
+    const follows=applySchoolSteering(a,sampleFish(tank.animals),goal,.5,.84,false,regroup);
+    return {follows,z:goal.z};
+  }
+  assert.equal(steer(0).follows,false);
+  const joined=steer(1);
+  assert.ok(joined.follows && joined.z>.06,'heads back towards the straggling schoolmate');
+  b.species='guppy';
+  assert.equal(steer(1).follows,false);
 });

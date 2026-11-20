@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { addAnimal, createInitialState, restoreState, feed, consumePellet, changeWater, advanceSimulation, MAX_FOOD_PELLETS, substrateHeight } from '../src/simulation.js';
+import { fishMouth } from '../src/fish-feeding.js';
+import { createSceneCollisions } from '../src/scene-collisions.js';
 import { advanceBehavior } from '../src/behavior.js';
 import { residentSkinBounds } from '../src/resident-collisions.js';
 
 const sumFood = state => state.foodPellets.reduce((sum,p)=>sum+p.mass,0);
 const nearly = (a,b,tolerance=1e-10) => assert.ok(Math.abs(a-b)<tolerance,`${a} != ${b}`);
-function run(state,seconds){for(let frame=0;frame<seconds*30;frame++)advanceBehavior(state,1/30);}
+function run(state,seconds,scene){for(let frame=0;frame<seconds*30;frame++)advanceBehavior(state,1/30,scene);}
 function fixture(){
   const state=createInitialState();
   state.animals=state.animals.slice(0,2);
@@ -130,8 +132,10 @@ test('feeding creates visible physical food but cannot lower hunger before conta
   assert.equal(a.bites,0);
 });
 
-test('hungry fish actively seek, reach and eat pellets while a satiated fish leaves them',()=>{
+test('hungry fish actively seek, reach and eat pellets while a satiated fish leaves them',t=>{
   const state=fixture(),hungry=state.animals[0],full=state.animals[1];
+  // Keep the rain of pellets repeatable for the timed pursuit and meal.
+  t.mock.method(Math,'random',()=>.5);
   feed(state);
   const start={...hungry.position};
   advanceBehavior(state,.2);
@@ -148,7 +152,8 @@ test('hungry fish actively seek, reach and eat pellets while a satiated fish lea
 
 test('a contact bite affects only its eater, conserves mass and cannot overeat',()=>{
   const state=fixture(),a=state.animals[0],other=state.animals[1];
-  feed(state);const pellet=state.foodPellets[0];a.position={x:pellet.x,y:pellet.y,z:pellet.z};
+  feed(state);const pellet=state.foodPellets[0];
+  const {x,y,z}=fishMouth(a);Object.assign(pellet,{x,y,z});
   const oldFood=state.food,oldWaste=state.detritus,oldAmmonia=state.water.ammonia,otherHunger=other.hunger;
   const bite=consumePellet(state,a.id,pellet.id);
   assert.equal(bite.ok,true);assert.equal(a.bites,1);assert.ok(a.biteFlash>0);
@@ -178,7 +183,7 @@ test('saving on the frame that finishes a pellet preserves the feeding state', (
   const [fish] = state.animals;
   feed(state);
   const pellet = state.foodPellets[0];
-  fish.position = { x: pellet.x, y: pellet.y, z: pellet.z };
+  const {x,y,z}=fishMouth(fish); Object.assign(pellet,{x,y,z});
   fish.targetFoodId = pellet.id;
   pellet.mass = .0001;
   assert.equal(consumePellet(state, fish.id, pellet.id).grams, .0001);
@@ -333,10 +338,12 @@ test('fish abandon unreachable bottom remnants and respond to fresh surface food
   a.position={x:0,y:.67,z:.4};a.hunger=80;a.targetFoodId='settled';
   const floor=substrateHeight(0,.4)+.04;
   state.foodPellets=[{id:'settled',x:0,y:floor,z:.4,mass:.003,ageSeconds:100,seed:.3}];state.food=.003;
-  feed(state);advanceBehavior(state,.1);
+  const scene=createSceneCollisions();
+  scene.blocksFood=p=>p.id==='settled';
+  feed(state);advanceBehavior(state,.1,scene);
   assert.ok(a.targetFoodId&&a.targetFoodId!=='settled');
-  run(state,12);assert.ok(a.bites>0);assert.ok(a.hunger<40);
-  assert.ok(state.foodPellets.some(p=>p.id==='settled'),'bottom remnants remain for grazers');
+  run(state,12,scene);assert.ok(a.bites>0);assert.ok(a.hunger<40);
+  assert.equal(state.foodPellets.find(p=>p.id==='settled').mass,.003);
 });
 
 test('malformed animal containers and pellet data cannot crash save migration',()=>{

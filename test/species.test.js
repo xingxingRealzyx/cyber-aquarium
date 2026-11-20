@@ -5,7 +5,9 @@ import { advanceBehavior } from '../src/behavior.js';
 
 for (const [species, spec] of Object.entries(SPECIES)) {
   if (spec.type !== 'fish') continue;
-  test(`${species} can be stocked, fed, restored and affected by the water`, () => {
+  test(`${species} can be stocked, fed, restored and affected by the water`, t => {
+    // Release the same surface cloud for every body shape and initial heading.
+    t.mock.method(Math, 'random', () => .78);
     const tank = createInitialState();
     tank.animals.length = 0;
     const { animal } = addAnimal(tank, species);

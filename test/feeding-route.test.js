@@ -39,8 +39,8 @@ test('a fish can reach a pellet by swimming over a barrier a bottom dweller cann
 
 test('no bite through a thin wall even within mouth reach; replacing scenery invalidates the cached failure', () => {
   const scene=createSceneCollisions(), f=fish();
-  f.size=.35; f.position.x=-.13;
-  const food={x:.12,y:1.5,z:0};
+  f.size=.55; f.position.x=-.20;
+  const food={x:.028,y:1.5,z:0};
   scene.update(wall(0,2,0,.008,4.4,4.2),[]);
   assert.equal(feedingRoute(scene,f,food),null);
   scene.update([],[]);

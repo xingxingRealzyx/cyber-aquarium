@@ -35,6 +35,9 @@ const smooth = (a, b, x) => {
 };
 const band = (x, center, radius, edge) => 1 - smooth(radius - edge, radius + edge, Math.abs(x - center));
 
+// Rear edge of the gill cover in flank UV coordinates, shared with the moving skin.
+export const gillCoverEdge = h => .718 + .42*(h-.46)**2 + .012*Math.sin(h*5);
+
 // Species markings use the same local flank coordinates on both sides. Sizes and
 // phases vary between residents while diagnostic stripes, bars and spots stay put.
 const flankPatterns = {
@@ -60,7 +63,10 @@ const flankPatterns = {
       const branch = .5 + (row%2 ? -.41 : .41)*arc;
       line = Math.max(line,band(across,branch,.061+.031*arc,.03)*.92);
     }
-    const breaks = .12 + .87 * smooth(-.71,.12,Math.sin(16*u + 12*h + phase) + .6*Math.cos(11*h - 13*u) + .9*warp);
+    // The turquoise cheek lines fade into bare lip tissue before the UV
+    // meridians converge at the tips of the opening jaws.
+    const breaks = (1-smooth(.915,.982,u)) *
+      (.12 + .87 * smooth(-.71,.12,Math.sin(16*u + 12*h + phase) + .6*Math.cos(11*h - 13*u) + .9*warp));
     layer(rgb, [48, 123, 124], band(fract(path), .50, .24, .07) * breaks * .68);
     layer(rgb, [97, 199, 192], line * breaks * (.76 + .22*Math.sin(Math.PI*h)));
     layer(rgb, [164, 219, 201], band(fract(path), .56, .06, .035) * breaks * .65);
@@ -303,7 +309,7 @@ function paintBody(species, variant, marks) {
       layer(rgb, scaleShadow, groove * .15 * area);
       layer(rgb, pearl, ridge * (.035 + cellShine * .14) * (.75 + .5 * sheen) * area);
       // Shoulder contour and a very fine paired opercular line, with a smooth cheek in front.
-      const gill = .718 + .084 * (h - .46) ** 2 * 5 + .012 * Math.sin(h * 5);
+      const gill = gillCoverEdge(h);
       const cheek = smooth(.77, .87, u) * (1 - smooth(.91, 1, u)) * band(h, .40, .16, .1);
       layer(rgb, pearl, cheek * .22);
       const plate = band(h, .51, .31, .11);

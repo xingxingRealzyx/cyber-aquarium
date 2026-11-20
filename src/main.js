@@ -95,6 +95,7 @@ app.innerHTML = `
         <small></small>
       </div>
     </header>
+    <button type="button" class="wide-btn" data-action="follow-fish" hidden>跟随观察</button>
     <section class="case-card" aria-label="感染护理" hidden>
       <div class="case-heading"><strong data-field="infection"></strong><span data-field="case-status"></span></div>
       <p data-field="case-note"></p>
@@ -104,6 +105,7 @@ app.innerHTML = `
     <button class="secondary-btn individual-feed" data-action="feed">${icon('feed')} 投喂全缸</button>
     <button class="danger-btn" data-action="remove-animal">移出鱼缸</button>
   </aside>
+  <button type="button" id="follow-stop" class="follow-stop interactive" data-action="stop-follow" hidden><span></span>退出跟拍</button>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div class="dock-wrap chrome interactive"><div id="dock" class="dock">
     <button type="button" class="drag-handle" title="按住这里移动整个鱼缸" aria-label="移动鱼缸">${icon('move')}<span>移动</span></button><i></i>
@@ -158,7 +160,8 @@ function behaviorLabel(a) {
     return state.foodPellets.some(isSettledPellet) ? '尚未找到可吃的底粮' : '等待饲料沉底';
   }
   return ({seeking:'正在追逐饲料',eating:'正在进食',resting:'饱腹休憩',gasping:'浮头呼吸',grazing:'底部觅食',
-    swimming:'自由游动',schooling:'跟随鱼群',chasing:'追逐同伴',darting:'与同伴嬉游',evading:'游开躲避潜水员'})[a.behavior] || '自由游动';
+    swimming:'自由游动',schooling:'跟随鱼群',chasing:'追逐同伴',darting:'与同伴嬉游',evading:'游开躲避潜水员',
+    startled:'随同伴受惊避让',regrouping:'与同伴重新聚群'})[a.behavior] || '自由游动';
 }
 function durationLabel(hours) {
   if(hours<1/60) return '不到 1 分钟';
@@ -365,15 +368,28 @@ function closePanel() {
   updatePointerPosition(lastPointer);
 }
 function selectAnimal(id) {
+  renderer?.followAnimal(null);
   selectedId=state.animals.some(a=>a.id===id)?id:null;
   if(selectedId) $('#hint').classList.add('dismissed');
   renderer?.setSelectedAnimal?.(selectedId);
   updateInspector();
 }
+function canFollowFish(animal) {
+  return animal?.alive && SPECIES[animal.species].type==='fish' &&
+    (!stillFrame || stillFrame.animals.some(visible=>visible.id===animal.id && visible.alive));
+}
 function updateInspector() {
   const a=state.animals.find(x=>x.id===selectedId);
   const inspector=$('#inspector');
-  inspector.hidden=!a;
+  if (renderer?.followedId && (!a?.alive || a.id!==renderer.followedId)) renderer.followAnimal(null);
+  const following=Boolean(renderer?.followedId);
+  const stop=$('#follow-stop');
+  stop.hidden=!following;
+  inspector.hidden=!a || following;
+  if (following) {
+    stop.querySelector('span').textContent=animalLabel(a);
+    return;
+  }
   if (!a) {selectedId=null;inspector.removeAttribute('data-animal-id');renderer?.setSelectedAnimal?.(null);return;}
   if (inspector.dataset.animalId !== a.id) {
     inspector.scrollTop = 0;
@@ -382,6 +398,7 @@ function updateInspector() {
     inspector.querySelector('[data-field="sex"]').textContent = sexLabel(a);
   }
   inspector.dataset.animalId=a.id;
+  inspector.querySelector('[data-action="follow-fish"]').hidden=!canFollowFish(a);
   inspector.querySelector('.individual-feed').hidden=!a.alive;
   inspector.querySelector('[data-action="remove-animal"]').textContent = a.alive ? '移出鱼缸' : '捞起遗体';
   const ageLabel = a.species === 'shrimp' ? '虾龄' : a.species === 'snail' ? '螺龄' : '鱼龄';
@@ -461,6 +478,20 @@ function perform(action) {
   else if(action==='water') openPanel('water');
   else if(action==='life') openPanel('life');
   else if(action==='scenery') openPanel('scenery');
+  else if(action==='follow-fish') {
+    const fish=state.animals.find(a=>a.id===selectedId);
+    if (renderer && canFollowFish(fish)) {
+      closePanel();
+      renderer.followAnimal(fish.id,fish.size);
+      updateInspector();
+      $('#follow-stop').focus({preventScroll:true});
+    }
+  }
+  else if(action==='stop-follow') {
+    renderer?.followAnimal(null);
+    updateInspector();
+    $('#inspector [data-action="follow-fish"]').focus({preventScroll:true});
+  }
   else if(action==='settings') openPanel('settings');
   else if(action==='check-update' || action==='install-update') return void runUpdate(action==='install-update');
   else if(action==='feed') {
@@ -679,6 +710,7 @@ if(saveError)notify('旧存档无法读取，已建立一只新鱼缸');
 // Read-only diagnostic snapshot is useful when verifying the native GPU renderer.
 Object.defineProperty(window,'aquariumDiagnostics',{get:()=>({
   state:JSON.parse(JSON.stringify(state)), stats:{...stats}, renderer:renderer?.renderer.info.render, panelOpen, selectedId,
+  camera:renderer && {zoom:renderer.camera.zoom, position:renderer.camera.position.toArray(), followedId:renderer.followedId, target:renderer.controls.target.toArray()},
   screenAnimals:renderer?.getAnimalScreenPositions?.()||[], screenBroods:renderer?.getBroodScreenPositions?.()||[],
   screenToys:renderer?.getToyScreenPositions?.()||[],
 })});

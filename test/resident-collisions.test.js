@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Box3, Matrix3, Matrix4, Texture, TextureLoader, Vector3 } from 'three';
+import { Box3, Matrix3, Matrix4, Raycaster, Texture, TextureLoader, Vector3 } from 'three';
 import { OBB } from 'three/addons/math/OBB.js';
 import { createFishModel } from '../src/fish-model.js';
 import { createShrimpModel, animateShrimp } from '../src/shrimp-model.js';
@@ -37,25 +37,58 @@ function meshesOverlap(a, b, seconds = 0) {
   return first.some(x => second.some(y => x.intersectsOBB(y)));
 }
 
-test('each species box contains the animated mesh, including tails and angelfish fins', () => {
+function visitFishExtremes(model,visit) {
+  const vertex=new Vector3(), shift=new Vector3();
+  for (const mesh of model.children) {
+    const positions=mesh.geometry.attributes.position, morphs=mesh.geometry.morphAttributes.position;
+    const jaw=morphs?.[mesh.morphTargetDictionary?.gape];
+    const gill=morphs?.[mesh.morphTargetDictionary?.operculum];
+    for (let i=0;i<positions.count;i++) {
+      const stroke=mesh===model.userData.face ? 0 : .9*Math.hypot(morphs[0].getZ(i),morphs[1].getZ(i));
+      if (jaw) shift.fromBufferAttribute(jaw,i);
+      if (gill && gill.getZ(i)!==0) {
+        assert.equal(shift.lengthSq(),0,'the jaws and covers have separate attachments');
+        shift.fromBufferAttribute(gill,i);
+      }
+      for (const open of jaw ? [false,true] : [false]) {
+        vertex.fromBufferAttribute(positions,i);
+        if (open) vertex.add(shift);
+        vertex.z-=stroke;visit(vertex);
+        if (stroke>0) { vertex.z+=2*stroke;visit(vertex); }
+      }
+    }
+  }
+}
+
+test('each species box contains its closed and open jaws as well as swimming fins', () => {
   for (const [species, definition] of Object.entries(SPECIES)) {
     if (definition.type !== 'fish') continue;
     const a = resident('resident', species, { x: 0,y: 0,z: 0 });
     const model = createFishModel(species,.5);
     const { bounds } = makeResidentBox(a);
-    const vertex = new Vector3();
-    for (const part of model.children.filter(o => o.visible)) {
-      const positions = part.geometry.attributes.position, morphs = part.geometry.morphAttributes.position;
-      for (let i=0; i<positions.count; i++) {
-        vertex.fromBufferAttribute(positions,i);
-        const amplitude = morphs ? .9 * Math.hypot(morphs[0].getZ(i),morphs[1].getZ(i)) : 0;
-        vertex.z -= amplitude;
-        assert.ok(bounds.containsPoint(vertex), species + ' negative fin stroke');
-        vertex.z += 2*amplitude;
-        assert.ok(bounds.containsPoint(vertex), species + ' positive fin stroke');
-      }
-    }
+    visitFishExtremes(model,vertex=>assert.ok(bounds.containsPoint(vertex),species+' animated skin'));
     model.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); });
+  }
+});
+
+test('opening each fish mouth exposes a recessed cavity through the textured skin', () => {
+  for (const [species,definition] of Object.entries(SPECIES)) {
+    if (definition.type!=='fish') continue;
+    const model=createFishModel(species,.5), {parts:[skin],face}=model.userData;
+    const vertices=skin.geometry.attributes.position;
+    let tip=0;
+    for (let i=1;i<vertices.count;i++) if (vertices.getX(i)>vertices.getX(tip)) tip=i;
+    const ray=new Raycaster(new Vector3(1,vertices.getY(tip)-.008,0),new Vector3(-1,0,0));
+    const surfaces=[skin,face];
+    const closed=ray.intersectObjects(surfaces)[0];
+    assert.equal(closed?.object,skin,species+' has an intact lower jaw when closed');
+    for (const opening of [.22,1]) {
+      for (const mesh of surfaces) mesh.morphTargetInfluences[mesh.morphTargetDictionary.gape]=opening;
+      const hit=ray.intersectObjects(surfaces)[0];
+      assert.equal(hit?.object,face,species+' has an opening into the oral lining');
+      assert.ok(closed.point.x-hit.point.x>.015,species+' has visible depth behind the lips');
+    }
+    model.traverse(o=>{o.geometry?.dispose();o.material?.dispose();});
   }
 });
 
@@ -86,16 +119,10 @@ test('a pitched fish has the same clearance under the waterline as its rendered 
   const skin = residentSkinBounds(fish);
   const model = createFishModel(fish.species,.5);
   let highest = -Infinity;
-  const vertex = new Vector3();
-  for (const mesh of [...model.userData.parts, model.userData.face]) {
-    const {position} = mesh.geometry.attributes, morphs = mesh.geometry.morphAttributes.position;
-    for (let i = 0; i < position.count; i++) {
-      vertex.fromBufferAttribute(position,i);
-      const zStroke = morphs ? .9 * Math.hypot(morphs[0].getZ(i), morphs[1].getZ(i)) : 0;
-      const up = box.axes[0].y*vertex.x + box.axes[1].y*vertex.y + box.axes[2].y*vertex.z;
-      highest = Math.max(highest,fish.position.y + fish.size * (up + Math.abs(box.axes[2].y)*zStroke));
-    }
-  }
+  visitFishExtremes(model,vertex=>{
+    const up=box.axes[0].y*vertex.x+box.axes[1].y*vertex.y+box.axes[2].y*vertex.z;
+    highest=Math.max(highest,fish.position.y+fish.size*up);
+  });
   assert.ok(skin.max.y >= highest && skin.max.y - highest < .003);
   assert.ok(skin.max.y < 4.10, 'there is room to move up and let the drifting diver pass underneath');
   model.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); });

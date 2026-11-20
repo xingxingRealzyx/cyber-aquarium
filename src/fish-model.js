@@ -1,68 +1,16 @@
 import * as THREE from 'three';
+import { FISH_PROFILES as PROFILES } from './fish-profiles.js';
+import { fishMouth, suctionReach } from './fish-feeding.js';
 import { ConvexHull } from 'three/addons/math/ConvexHull.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { createFishMaterials, applyDecayMaterial, hasFinAtlas } from './fish-materials.js';
+import { createFishMaterials, applyDecayMaterial, gillCoverEdge, hasFinAtlas } from './fish-materials.js';
+import { BITE_DURATION_SECONDS } from './simulation.js';
 
 const stations = [0, .10, .25, .43, .61, .75, .86, .94, .99, 1];
 const upper = [.21,.35,.68,.94,1,.90,.67,.40,.13,0];
 const lower = [.23,.30,.56,.84,1,.94,.71,.40,.14,0];
 const width = [.16,.28,.52,.82,.99,1,.81,.52,.19,0];
-const angelUpper = [.12,.27,.67,.96,1,.83,.56,.30,.12,0];
-const angelLower = [.12,.25,.59,.95,1,.97,.70,.36,.13,0];
-const discUpper = [.15,.41,.76,.97,1,.89,.67,.39,.105,0];
-const discLower = [.17,.44,.79,.98,1,.91,.72,.48,.13,0];
-const discWidth = [.15,.31,.59,.88,1,.94,.78,.48,.17,0];
-const deepBack = [.18,.31,.64,.94,1,.87,.58,.32,.10,0];
 
-// Body dimensions are measured from the caudal peduncle to the snout.
-// Median-fin front/back lie on that axis (0 = peduncle, 1 = snout).
-const PROFILES = {
-  neon: { length: .63, nose: .31, top: .125, belly: .116, width: .074, tail: .19, spread: .117, fork: .46, eye: .032,
-    iris: '#79847d', adipose: true },
-  guppy: { length: .63, nose: .32, top: .120, belly: .135, width: .086, tail: .30, spread: .202, fork: -.13, eye: .034,
-    noseLift: .035, dorsal: { height: .127, sweep: .125 } },
-  angelfish: { length: .71, nose: .34, top: .259, belly: .252, width: .077, tail: .225, spread: .172, fork: -.05, eye: .043,
-    upper: angelUpper, lower: angelLower, iris: '#8b4434', pelvicStreamer: .40, beat: 5.8, amplitude: .42,
-    dorsal: { front: .70, back: .045, tip: .30, height: .25, sweep: .15 },
-    anal: { front: .61, height: .23, sweep: .15 } },
-  zebra: { length: .78, nose: .38, top: .104, belly: .108, width: .072, tail: .186, spread: .126, fork: .54, eye: .030,
-    dorsal: { front: .47 }, anal: { height: .09 } },
-  harlequin: { length: .68, nose: .33, top: .165, belly: .160, width: .084, tail: .203, spread: .146, fork: .52, eye: .035,
-    iris: '#998061' },
-  discus: { length: .84, nose: .43, top: .336, belly: .321, width: .105, tail: .169, spread: .126, roundTail: true, eye: .044,
-    upper: discUpper, lower: discLower, girth: discWidth, noseLift: -.018, eyeStation: .835, iris: '#d84829', irisInnerRing: 7, pairedScale: 1.10,
-    pelvicStreamer: .19, beat: 6.7, amplitude: .55, flex: .245, medianStroke: .05,
-    dorsal: { front: .82, back: .032, tip: .51, height: .112, sweep: .062, backHeight: .41 },
-    anal: { front: .61, back: .037, tip: .40, height: .100, sweep: .076, backHeight: .41 } },
-  cardinal: { length: .68, nose: .33, top: .12, belly: .113, width: .067, tail: .171, spread: .102, roundedLobes: true, fork: .56, eye: .032,
-    iris: '#83938c', adipose: true, dorsal: { front: .55, back: .34, height: .085 }, beat: 9.1 },
-  rummynose: { length: .70, nose: .35, top: .11, belly: .114, width: .070, tail: .21, spread: .16, roundedLobes: true, fork: .68, eye: .033,
-    iris: '#ac7a60', adipose: true, dorsal: { front: .53, back: .33, height: .11 },
-    anal: { front: .45, back: .09, height: .087 }, beat: 9.4 },
-  blackneon: { length: .65, nose: .32, top: .129, belly: .14, width: .071, tail: .173, spread: .118, roundedLobes: true, fork: .49, eye: .034,
-    iris: '#bdbc98', upperIris: '#df502b', adipose: true, dorsal: { front: .56, back: .32, height: .094 },
-    anal: { front: .49, back: .10, height: .09 } },
-  cherrybarb: { length: .69, nose: .35, top: .134, belly: .128, width: .089, tail: .19, spread: .127, roundedLobes: true, fork: .49, eye: .032,
-    iris: '#ad805b', dorsal: { front: .63, back: .34, height: .106, sweep: .075 },
-    anal: { front: .36, back: .19, height: .080 }, beat: 7.9 },
-  tigerbarb: { length: .69, nose: .35, top: .199, belly: .173, width: .096, tail: .185, spread: .15, roundedLobes: true, fork: .61, eye: .035,
-    upper: deepBack, iris: '#c79151', dorsal: { front: .65, back: .29, height: .147, sweep: .066 },
-    anal: { front: .39, back: .17, height: .10 }, beat: 8.5 },
-  galaxy: { length: .54, nose: .26, top: .097, belly: .114, width: .069, tail: .139, spread: .083, roundedLobes: true, fork: .27, eye: .032,
-    iris: '#c69854', pairedScale: .79, noseLift: .018, dorsal: { front: .50, back: .23, height: .080 },
-    anal: { front: .42, back: .19, height: .084 }, beat: 10.2 },
-  blackskirt: { length: .68, nose: .34, top: .193, belly: .215, width: .074, tail: .173, spread: .138, roundedLobes: true, fork: .53, eye: .036,
-    upper: deepBack, iris: '#94938c', adipose: true, dorsal: { front: .65, back: .40, height: .161, sweep: .06 },
-    anal: { front: .56, back: .075, tip: .22, height: .138, sweep: .095, backHeight: .41 }, beat: 7.4 },
-  boesemani: { length: .88, nose: .43, top: .202, belly: .174, width: .102, tail: .23, spread: .174, roundedLobes: true, fork: .48, eye: .037,
-    upper: deepBack, iris: '#c69a50', pairedScale: 1.16, beat: 6.9, noseLift: .028,
-    firstDorsal: { front: .59, back: .48, tip: .44, height: .091, sweep: .043 },
-    dorsal: { front: .45, back: .08, tip: .42, height: .103, sweep: .066, backHeight: .39 },
-    anal: { front: .57, back: .075, tip: .30, height: .098, sweep: .068, backHeight: .35 } },
-  platy: { length: .62, nose: .30, top: .152, belly: .173, width: .105, tail: .157, spread: .127, roundTail: true, eye: .033,
-    iris: '#a78c55', noseLift: .038, dorsal: { front: .60, back: .28, height: .124, sweep: .074 },
-    anal: { front: .48, back: .34, height: .071 }, beat: 7.8 },
-};
 const pi2 = Math.PI * 2;
 const smooth = THREE.MathUtils.smoothstep;
 const v3 = (x,y,z=0) => new THREE.Vector3(x,y,z);
@@ -109,9 +57,59 @@ function surface(rows, cols, at) {
   return geometry;
 }
 
+const jawHinge=.875, headBands=12, trunkBands=35;
+function jawWeight(u) {
+  const t=THREE.MathUtils.clamp((u-jawHinge)/(1-jawHinge),0,1);
+  return t*t*(2-t);
+}
+function jawDelta(p,u,mandible) {
+  const weight=jawWeight(u)*p.length;
+  return v3(weight*(mandible ? -.012 : .010),weight*(mandible ? -.073 : .019));
+}
+function snoutPoint(p,u,v) {
+  // The slit curves gently down from the corners of the mouth onto the snout.
+  const t=THREE.MathUtils.clamp((u-jawHinge)/(1-jawHinge),0,1);
+  const angle=v*pi2;
+  return section(p,u,angle-.14*Math.sin(angle)*Math.sin(Math.PI*t));
+}
+const restingGape=.035;
+
+function addGillCovers(geometry,p) {
+  const {uv,position,normal} = geometry.attributes;
+  const shifts = new Float32Array(position.count*3);
+  const opened = position.clone();
+  for (let i=0;i<position.count;i++) {
+    const u=uv.getX(i), angle=uv.getY(i)*pi2, h=.5-.5*Math.cos(angle);
+    const edge=gillCoverEdge(h);
+    // The rear rim lifts away from the flank. The attachment beneath the eye,
+    // the throat and the dorsal midline stay in place.
+    const lift=smooth(u,edge-.035,edge+.006)*(1-smooth(u,edge+.006,.87))
+      * (1-smooth(Math.abs(h-.51),.20,.37));
+    shifts[3*i]=-.018*p.length*lift;
+    shifts[3*i+2]=.24*p.width*lift*Math.sin(angle);
+    opened.setXYZ(i,position.getX(i)+shifts[3*i],position.getY(i),position.getZ(i)+shifts[3*i+2]);
+  }
+  const lifted=new THREE.BufferGeometry().setAttribute('position',opened).setIndex(geometry.index);
+  lifted.computeVertexNormals();
+  const normals=new Float32Array(shifts.length);
+  for (let i=0;i<position.count;i++) {
+    // Include the neighbours of the lifted rim in its shading, leaving the
+    // hand-smoothed normals at the belly seam and split mouth intact.
+    if (uv.getX(i)<.65 || uv.getX(i)>=jawHinge || Math.abs(Math.sin(uv.getY(i)*pi2))<.15) continue;
+    for (let j=0;j<3;j++) normals[3*i+j]=lifted.attributes.normal.array[3*i+j]-normal.array[3*i+j];
+  }
+  for (const [attribute,array] of [['position',shifts],['normal',normals]]) {
+    const morph=new THREE.BufferAttribute(array,3);
+    morph.name='operculum';
+    geometry.morphAttributes[attribute].push(morph);
+  }
+  lifted.dispose();
+}
+
 function bodyGeometry(p) {
-  const rows=40, cols=32;
-  const geometry=surface(rows,cols,(u,v)=>section(p,u,v*pi2));
+  const rows=trunkBands+headBands, cols=32;
+  const station=i=>i<=trunkBands ? i/40 : jawHinge+(1-jawHinge)*(i-trunkBands)/headBands;
+  const geometry=surface(rows,cols,(t,v)=>snoutPoint(p,station(Math.round(t*rows)),v));
   const normals=geometry.attributes.normal;
   for(let i=0;i<=rows;i++) {
     const a=i*(cols+1), b=a+cols;
@@ -120,6 +118,44 @@ function bodyGeometry(p) {
     normals.setXYZ(b,combined.x,combined.y,combined.z);
   }
   for(let j=0;j<=cols;j++) normals.setXYZ(rows*(cols+1)+j,1,0,0);
+
+  // Split the jaw at its two corners. Upper and lower skins share their UVs
+  // and neutral normals, but the moving lower lip has its own boundary.
+  const pos=Array.from(geometry.attributes.position.array), norm=Array.from(normals.array);
+  const uv=Array.from(geometry.attributes.uv.array), indices=geometry.index.array;
+  const baseCount=pos.length/3, lowerEdge=new Map();
+  for (let i=0;i<=rows;i++) for (let j=0;j<=cols;j++) {
+    const k=i*(cols+1)+j;
+    uv[2*k]=station(i);
+    if (i<=trunkBands || (j!==cols/4 && j!==3*cols/4)) continue;
+    lowerEdge.set(k,pos.length/3);
+    pos.push(pos[3*k],pos[3*k+1],pos[3*k+2]);
+    norm.push(norm[3*k],norm[3*k+1],norm[3*k+2]);
+    uv.push(uv[2*k],uv[2*k+1]);
+  }
+  for (let i=trunkBands;i<rows;i++) for (const j of [cols/4-1,3*cols/4]) {
+    const start=(i*cols+j)*6;
+    for (let k=start;k<start+6;k++) indices[k]=lowerEdge.get(indices[k]) ?? indices[k];
+  }
+  const movement=[], normalDelta=[], normal=v3(0,0);
+  for (let k=0;k<pos.length/3;k++) {
+    const u=uv[k*2], v=uv[k*2+1], lower=v<.25 || v>.75 || k>=baseCount;
+    const shift=jawDelta(p,u,lower);
+    pos[3*k]+=restingGape*shift.x; pos[3*k+1]+=restingGape*shift.y;
+    movement.push(shift.x,shift.y,0);
+    // Transform the neutral normal by the local slope of the deformed jaw.
+    const t=THREE.MathUtils.clamp((u-jawHinge)/(1-jawHinge),0,1);
+    const slope=(4*t-3*t*t)/(1-jawHinge);
+    normal.fromArray(norm,3*k);
+    normal.x=(normal.x-normal.y*slope*(lower ? -.073 : .019))/(1+slope*(lower ? -.012 : .010));
+    normal.normalize();
+    normalDelta.push(normal.x-norm[3*k],normal.y-norm[3*k+1],normal.z-norm[3*k+2]);
+  }
+  geometry.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  geometry.setAttribute('normal',new THREE.Float32BufferAttribute(norm,3));
+  geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));
+  setGape(geometry,movement,normalDelta);
+  addGillCovers(geometry,p);
   return geometry;
 }
 
@@ -209,6 +245,50 @@ function finGeometry(p, atlas = false) {
   return joined;
 }
 
+function setGape(geometry,positions,normals) {
+  const zeros=()=>new Float32Array(geometry.attributes.position.count*3);
+  for (const [key,values] of [['position',positions],['normal',normals]]) {
+    const delta=new THREE.Float32BufferAttribute(values ?? zeros(),3);
+    delta.name='gape';
+    geometry.morphAttributes[key]=[delta];
+  }
+  geometry.morphTargetsRelative=true;
+}
+
+function oralCavity(p) {
+  const depth=[0,.035,.095,.22,.46,.74,1];
+  // The outer ring is sewn to the same vertices as the skin. Its four arcs
+  // run corner-to-tip around the lower lip and return along the upper lip.
+  function lining(open) {
+    return surface(depth.length-1,headBands*4,(r,v)=>{
+      const i=Math.round(v*headBands*4)%(headBands*4);
+      const arc=Math.floor(i/headBands), f=(i%headBands)/headBands;
+      const u=jawHinge+(1-jawHinge)*(arc%2===0 ? f : 1-f);
+      const lower=arc<2;
+      const lip=snoutPoint(p,u,(arc===0 || arc===3) ? .75 : .25);
+      lip.addScaledVector(jawDelta(p,u,lower),restingGape+open);
+      const d=depth[Math.round(r*(depth.length-1))];
+      const throat=v3(p.nose-p.length*.12,(p.noseLift ?? .012)*.35-.004-open*p.length*.008);
+      lip.lerp(throat,d);
+      const roll=Math.sin(Math.PI*Math.min(1,d/.095))*jawWeight(u)*p.length*.003;
+      lip.x+=roll; lip.y+=lower ? roll : -roll;
+      return lip;
+    });
+  }
+  const closed=lining(0), opened=lining(1);
+  const colors=[], color=new THREE.Color();
+  const upperLip=['#786c60','#938778','#785f56','#5c403d','#3b2a2c','#291e23','#201b1f'];
+  const lowerLip=['#948979','#af9e86','#886a5c','#654842','#413033','#2a2024','#201b1f'];
+  for (let i=0;i<depth.length;i++) for (let j=0;j<=4*headBands;j++) {
+    color.set((j<2*headBands ? lowerLip : upperLip)[i]); colors.push(color.r,color.g,color.b);
+  }
+  closed.setAttribute('color',new THREE.Float32BufferAttribute(colors,3));
+  const difference=key=>opened.attributes[key].array.map((value,i)=>value-closed.attributes[key].array[i]);
+  setGape(closed,difference('position'),difference('normal'));
+  opened.dispose();
+  return closed;
+}
+
 function faceGeometry(p) {
   const details=[];
   const iris = new THREE.Color(p.iris ?? '#938966');
@@ -240,18 +320,20 @@ function faceGeometry(p) {
     glint.translate(eyeMount.x+.005,eyeMount.y+.006,eyeMount.z+side*(.004+p.eye*.21));
     colorGeometry(glint,'#c9dedb');details.push(glint);
 
-    // A slight downturn at mid-jaw turns back up into the corner of the gape.
-    const gape = [[.999,.248],[.982,.236],[.955,.222],[.926,.219],[.897,.228]];
-    const jawPath = shift => gape.map(([u,v]) => section(p,u,(side>0?v+shift:1-v-shift)*pi2));
-    const lip=new THREE.TubeGeometry(new THREE.CatmullRomCurve3(jawPath(0)),12,.0015,4,false);
-    colorGeometry(lip,'#45423b');details.push(lip);
-    const lowerLip=new THREE.TubeGeometry(new THREE.CatmullRomCurve3(jawPath(-.005)),12,.0010,4,false);
-    colorGeometry(lowerLip,'#9e9a83');details.push(lowerLip);
-    const nostril=section(p,.945,(side>0?.31:.69)*pi2);
+    const nostril=snoutPoint(p,.945,side>0?.31:.69);
+    const shift=jawDelta(p,.945,false);
+    nostril.addScaledVector(shift,restingGape);
     const dot=new THREE.SphereGeometry(.003,6,4);dot.translate(nostril.x,nostril.y,nostril.z);
     colorGeometry(dot,'#494b41');details.push(dot);
+    const positions=[];
+    for(let i=0;i<dot.attributes.position.count;i++) positions.push(shift.x,shift.y,0);
+    setGape(dot,positions);
   }
+  for (const part of details) if (!part.morphAttributes.position) setGape(part);
+  details.push(oralCavity(p));
   const joined=mergeGeometries(details);
+  joined.morphAttributes.position[0].name='gape';
+  joined.morphAttributes.normal[0].name='gape';
   details.forEach(g=>g.dispose());return joined;
 }
 
@@ -289,8 +371,8 @@ function swimMorphs(geometry,p,pairedFins=false) {
   }
   geometry.deleteAttribute('medianStroke');
   geometry.morphTargetsRelative=true;
-  geometry.morphAttributes.position=positions.map(data=>new THREE.Float32BufferAttribute(data,3));
-  geometry.morphAttributes.normal=normalDeltas.map(data=>new THREE.Float32BufferAttribute(data,3));
+  geometry.morphAttributes.position=[...positions.map(data=>new THREE.Float32BufferAttribute(data,3)),...(geometry.morphAttributes.position ?? [])];
+  geometry.morphAttributes.normal=[...normalDeltas.map(data=>new THREE.Float32BufferAttribute(data,3)),...(geometry.morphAttributes.normal ?? [])];
   return geometry;
 }
 
@@ -320,12 +402,21 @@ export function fishCollisionOutline(species) {
         stroke = Math.hypot(stroke+margin*Math.cos(deltaPhase), margin*Math.sin(deltaPhase));
       }
       const sweep = i === 3 ? 0 : .90*(stroke+finBeat);
-      vertex.z -= sweep;
-      box.expandByPoint(vertex);
-      extremes.push(vertex.clone());
-      vertex.z += 2*sweep;
-      box.expandByPoint(vertex);
-      if (sweep) extremes.push(vertex.clone());
+      // Jaw and operculum affect disjoint regions. Bound each moving vertex
+      // in both its neutral and its fully extended pose.
+      const [jaw,gills]=g.morphAttributes.position ?? [];
+      const dx=(jaw?.getX(j) ?? 0)+(gills?.getX(j) ?? 0);
+      const dy=jaw?.getY(j) ?? 0, dz=gills?.getZ(j) ?? 0;
+      for (let pose=0;pose<=(dx || dy || dz ? 1 : 0);pose++) {
+        vertex.fromBufferAttribute(positions,j);
+        vertex.x+=pose*dx; vertex.y+=pose*dy; vertex.z+=pose*dz;
+        vertex.z-=sweep;
+        box.expandByPoint(vertex);
+        extremes.push(vertex.clone());
+        vertex.z+=2*sweep;
+        box.expandByPoint(vertex);
+        if (sweep) extremes.push(vertex.clone());
+      }
     }
     g.dispose();
   }
@@ -360,14 +451,51 @@ export function createFishModel(species,seed) {
   const face=new THREE.Mesh(faceGeometry(profile),new THREE.MeshStandardMaterial({vertexColors:true,side:THREE.DoubleSide,roughness:.49}));
   // Two-sided membranes are thin and translucent. Draw each in one pass.
   for(const part of [fins,tail])part.material.forceSinglePass=true;
-  const mouthGlow=new THREE.Mesh(new THREE.SphereGeometry(.021,10,8),new THREE.MeshBasicMaterial({color:'#ebcd88',transparent:true,opacity:0,depthWrite:false}));
-  mouthGlow.position.copy(section(profile,1,0));mouthGlow.visible=false; mouthGlow.userData.pickIgnore=true;
-  group.add(body,tail,fins,face,mouthGlow);
-  group.userData={kind:'fish',parts:[body,tail,fins],face,mouthGlow,swimPhase:seed*pi2};
+  group.add(body,tail,fins,face);
+  group.userData={kind:'fish',parts:[body,tail,fins],face,swimPhase:seed*pi2,breathPhase:seed*pi2};
   return group;
 }
 
-export function animateFish(model,animal,dt,swimSpeed,decay) {
+function animateMouth(data, animal, profile, dt, tankSeconds, food) {
+  // An absolute tank clock preserves the breathing pose across pauses,
+  // camera redraws and reloading a paused tank. Each fish has its own rhythm.
+  const seconds = tankSeconds ?? (data.breathSeconds ?? 0) + dt;
+  data.breathSeconds = seconds;
+  const hz = (.99 + .13*Math.sin(data.breathPhase))*Math.sqrt(.68/profile.length);
+  const phase = data.breathPhase + pi2*((seconds*hz)%1);
+  const exertion = Math.min(1, data.strokeSpeed);
+  const normal = .025 + (.32 + .09*exertion)*(.5 - .5*Math.cos(phase));
+  const gasp = .10 + .64*(.5 - .5*Math.cos(2*phase));
+  const stressed = Number(animal.behavior === 'gasping');
+  data.breathStress = THREE.MathUtils.damp(data.breathStress ?? stressed, stressed, 4, dt);
+  let gape = THREE.MathUtils.lerp(normal, gasp, data.breathStress);
+  // The covers vent water a little later in the same breathing cycle.
+  const delay=pi2*.23;
+  const lift=(.46+.15*exertion)*(.5-.5*Math.cos(phase-delay));
+  const laboredLift=.08+.84*(.5-.5*Math.cos(2*phase-delay));
+  let gillOpening=THREE.MathUtils.lerp(lift,laboredLift,data.breathStress);
+
+  if (food && animal.behavior === 'seeking' && animal.position && animal.velocity) {
+    const lips = fishMouth(animal), reach = suctionReach(animal);
+    const dx = food.x-lips.x, dy = food.y-lips.y, dz = food.z-lips.z;
+    const distance = Math.hypot(dx,dy,dz);
+    const facing = distance < 1e-6 ? 1 : (dx*lips.fx + dy*lips.fy + dz*lips.fz)/distance;
+    gape = Math.max(gape, .76*(1-smooth(distance,reach,2*reach))*smooth(facing,.35,.85));
+  }
+  if (animal.biteFlash > 0) {
+    // Suction peaks just after capture; the jaw then closes around the food.
+    const age = BITE_DURATION_SECONDS-animal.biteFlash;
+    const strike = (.56+.44*smooth(age,0,.065))*(1-smooth(age,.085,.34));
+    gape = Math.max(gape, strike);
+    gillOpening=Math.max(gillOpening,smooth(age,.05,.18)*(1-smooth(age,.20,BITE_DURATION_SECONDS)));
+  }
+  const body = data.parts[0], face = data.face;
+  body.morphTargetInfluences[body.morphTargetDictionary.gape] = gape;
+  face.morphTargetInfluences[face.morphTargetDictionary.gape] = gape;
+  body.morphTargetInfluences[body.morphTargetDictionary.operculum] = gillOpening;
+}
+
+export function animateFish(model,animal,dt,swimSpeed,decay,tankSeconds,food) {
   const data=model.userData;
   const alive=animal.alive!==false, seeking=animal.behavior==='seeking';
   if (!alive) {
@@ -375,9 +503,9 @@ export function animateFish(model,animal,dt,swimSpeed,decay) {
       data.decayUniform = {value: decay};
       for (const part of [...data.parts, data.face]) applyDecayMaterial(part.material, data.decayUniform);
       for (const part of data.parts) part.morphTargetInfluences.fill(0);
+      data.face.morphTargetInfluences.fill(0);
     }
     data.decayUniform.value = decay;
-    data.mouthGlow.visible = false;
     return;
   }
   const profile=PROFILES[animal.species] ?? PROFILES.neon;
@@ -400,8 +528,5 @@ export function animateFish(model,animal,dt,swimSpeed,decay) {
     part.morphTargetInfluences[0]=cosine;
     part.morphTargetInfluences[1]=-sine;
   }
-  const bite=Math.min(1,(animal.biteFlash||0)/.45);
-  data.mouthGlow.visible=bite>0;
-  data.mouthGlow.material.opacity=.66*bite;
-  data.mouthGlow.scale.setScalar(1+(1-bite)*1.4);
+  animateMouth(data,animal,profile,Math.max(0,dt),tankSeconds,food);
 }

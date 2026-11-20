@@ -1,3 +1,4 @@
+import { feedingPose, mouthAtFood } from './fish-feeding.js';
 import { SPECIES, substrateHeight } from './simulation.js';
 import { createSceneCollisions } from './scene-collisions.js';
 
@@ -11,24 +12,39 @@ let emptyScene;
 
 function approach(a,from,food,velocity,benthic,scene) {
   const d=distance(from,food);
-  if (d<=.28 && (!scene.canGrazeFrom || scene.canGrazeFrom({position:from},food))) return [];
   const flat=Math.hypot(from.x-food.x,from.z-food.z);
   const dx=flat>1e-8?(from.x-food.x)/flat:1, dz=flat>1e-8?(from.z-food.z)/flat:0;
-  const sites=[];
   if (benthic) {
+    if (d<=.28 && scene.canGrazeFrom?.({position:from},food)!==false) return [];
     for (const [ux,uz] of [[dx,dz],[-dz,dx],[dz,-dx],[-dx,-dz]]) {
-      const x=food.x+.22*ux, z=food.z+.22*uz;
-      sites.push({x,y:ground(x,z),z});
+      const x=food.x+.22*ux,z=food.z+.22*uz,to={x,y:ground(x,z),z};
+      if (distance(to,food)<=.28 && scene.canGrazeFrom?.({position:to},food)!==false &&
+          scene.canSwimSegment(a,from,to,velocity)) return [to];
     }
-  } else {
-    sites.push({x:food.x+(from.x-food.x)*.22/d, y:food.y+(from.y-food.y)*.22/d, z:food.z+(from.z-food.z)*.22/d});
-    // At the bed a wide fish can take the pellet just below its nose.
-    for (const h of [.24,.16]) sites.push({x:food.x+.10*dx,y:food.y+h,z:food.z+.10*dz});
-    sites.push({x:food.x,y:food.y-.24,z:food.z});
+    return null;
   }
-  for (const to of sites) {
-    if (distance(to,food)>.28 || (scene.canGrazeFrom && !scene.canGrazeFrom({position:to},food))) continue;
-    if (scene.canSwimSegment(a,from,to,velocity)) return [to];
+  if (mouthAtFood(a,food,scene,false,from,velocity)) return [];
+  const face=heading(from,food);
+  if (d>.0001 && mouthAtFood(a,food,scene,false,from,face)) {
+    // Hover and aim the snout when the grain is already at head distance.
+    // A short oriented segment also sweeps the turning body against scenery.
+    const probe={x:from.x+face.x*.001,y:from.y+face.y*.001,z:from.z+face.z*.001};
+    if (scene.canSwimSegment(a,from,probe,velocity)) return [{...from,face}];
+  }
+  const yaw=Math.atan2(-dz,-dx);
+  const bed=food.y<ground(food.x,food.z)+.22;
+  const pitch=bed ? -.81 : Math.max(-.80,Math.min(.80,Math.atan2(food.y-from.y,flat)));
+  // At a steep angle or beside glass, first swim to a point behind the feeding
+  // pose. The last leg and the lips then face the same direction.
+  for (const side of [0,Math.PI/2,-Math.PI/2,Math.PI]) {
+    const {point:end,forward}=feedingPose(a,food,yaw+side,pitch);
+    if (scene.canGrazeFrom?.({position:end},food)===false) continue;
+    const line=heading(from,end);
+    if (mouthAtFood(a,food,scene,false,end,line) && scene.canSwimSegment(a,from,end,velocity)) return [end];
+    const length=.33+.25*(a.size??1);
+    const pre={x:end.x-length*forward.x,y:end.y-length*forward.y,z:end.z-length*forward.z};
+    if (scene.canSwimSegment(a,from,pre,velocity) &&
+        scene.canSwimSegment(a,pre,end,heading(from,pre)) && mouthAtFood(a,food,scene,false,end,forward)) return [pre,end];
   }
   return null;
 }
@@ -79,7 +95,7 @@ function plan(a,food,benthic,scene,maxNodes) {
   return null;
 }
 
-// The route excludes the start. [] is a real mouth contact; null is a failed
+// The route excludes the start. [] means the food is in reach; null is a failed
 // or exhausted search. A benthic route follows the height of the substrate
 // even when the straight line between its ends would pass below a sand bank.
 export function feedingRoute(scene,animal,pellet,{detour=true,maxNodes=80}={}) {
@@ -93,8 +109,8 @@ export function feedingRoute(scene,animal,pellet,{detour=true,maxNodes=80}={}) {
   const geometry=scene?.canSwimSegment?scene:emptyScene;
   const checks=scene && geometry!==scene ? {
     canGrazeFrom:scene.canGrazeFrom,
-    canSwimSegment(a,from,to,v) {
-      if (!geometry.canSwimSegment(a,from,to,v) || scene.canGrazeFrom?.({position:from},to)===false) return false;
+    canSwimSegment(a,from,to,v,scull) {
+      if (!geometry.canSwimSegment(a,from,to,v,scull) || scene.canGrazeFrom?.({position:from},to)===false) return false;
       const dx=to.x-from.x, dz=to.z-from.z, span=Math.hypot(dx,dz);
       return !benthic || !span || !scene.grazerObstacle?.({...a,position:from},dx/span,dz/span,span);
     },
@@ -107,14 +123,18 @@ export function feedingRoute(scene,animal,pellet,{detour=true,maxNodes=80}={}) {
   const key=[p.x,p.y,p.z,v?.x,v?.y,v?.z,animal.size,pellet.x,pellet.y,pellet.z,detour?maxNodes:0].join(',');
   if (cache.paths.has(key)) return cache.paths.get(key)?.map(point=>({...point}))??null;
   let nodes=approach(animal,p,pellet,v,benthic,checks);
-  if (!nodes && !benthic && p.y>3.35) {
+  const atBed=p.y<substrateHeight(p.x,p.z)+.75*(animal.size??1);
+  if (!nodes && !benthic && (p.y>3.35 || atBed)) {
     // A fish beside the surface can lack the room to pitch its tail upward
     // for a diving turn. Fin down while level with the previous stroke,
     // then start turning only where the entire second leg is feasible.
-    const below={x:p.x,y:Math.max(2.9,p.y-.55*(animal.size??1)),z:p.z};
-    if (checks.canSwimSegment(animal,p,below,v,true)) {
-      const reentry=approach(animal,below,pellet,v,false,checks);
-      if (reentry) nodes=[{...below,descend:true},...reentry];
+    // A fish that just foraged at the bed can likewise lift clear before
+    // turning its nose upwards, including after growing between meals.
+    const shift=.55*(animal.size??1);
+    const level={x:p.x,y:atBed ? p.y+shift : Math.max(2.9,p.y-shift),z:p.z};
+    if (checks.canSwimSegment(animal,p,level,v,true)) {
+      const reentry=approach(animal,level,pellet,v,false,checks);
+      if (reentry) nodes=[atBed ? {...level,rise:true} : {...level,descend:true},...reentry];
     }
   }
   if (!nodes && detour) nodes=plan(animal,pellet,benthic,checks,Math.max(0,Math.min(240,maxNodes)));

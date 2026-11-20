@@ -4,6 +4,8 @@ export function createDesktopView(camera, controls, canvas) {
   let width = 1, height = 1;
   let layout = null;
   let shiftX = 0, shiftY = 0;
+  let followedId = null, overview = null, framingZoom = null;
+  const translation = controls.target.clone();
   const events = new AbortController();
   const listener = { signal: events.signal };
 
@@ -35,8 +37,14 @@ export function createDesktopView(camera, controls, canvas) {
     if (!Number.isFinite(ratio) || ratio === 1) return;
     const limit = Math.abs(next - 1) * .58;
     const bound = value => Math.min(limit, Math.max(-limit, value));
-    shiftX = bound(handX + (shiftX - handX) * ratio);
-    shiftY = bound(handY + (shiftY - handY) * ratio);
+    if (!followedId) {
+      shiftX = bound(handX + (shiftX - handX) * ratio);
+      shiftY = bound(handY + (shiftY - handY) * ratio);
+      if (overview) { overview.shiftX = shiftX; overview.shiftY = shiftY; }
+    }
+    // While tracking, zoom around the fish. A wheel or pinch immediately
+    // takes control even during the automatic move into or out of a close-up.
+    framingZoom = null;
     camera.zoom = next;
     project();
   }
@@ -82,14 +90,54 @@ export function createDesktopView(camera, controls, canvas) {
   canvas.addEventListener('lostpointercapture', () => { middleDrag = null; }, listener);
   canvas.addEventListener('pointerup', () => { middleDrag = null; }, listener);
 
+  function followAnimal(id, size = 1) {
+    if (id === followedId) return;
+    followedId = id;
+    if (id) {
+      overview ??= { target: controls.target.clone(), zoom: camera.zoom, shiftX, shiftY };
+      framingZoom = Math.max(camera.zoom, Math.min(5, 2.5 / Math.max(.25, size)));
+    } else {
+      framingZoom = overview.zoom;
+    }
+  }
+
+  function advanceFollow(position, seconds) {
+    if (!overview || seconds <= 0) return false;
+    if (followedId && !position) followAnimal(null);
+    const target = followedId ? position : overview.target;
+    const weight = -Math.expm1(-6 * Math.min(seconds, .12));
+    // Translate the pivot and camera together. OrbitControls still owns the
+    // viewing direction, so a fish turning never twists the viewer's camera.
+    translation.subVectors(target, controls.target);
+    const moving = translation.lengthSq() > 0;
+    if (moving) {
+      if (translation.lengthSq() > 1e-10) translation.multiplyScalar(weight);
+      camera.position.add(translation);
+      controls.target.add(translation);
+    }
+    const ease = (current, goal) => Math.abs(goal-current) < 1e-5 ? goal : current + (goal-current)*weight;
+    const x = ease(shiftX, followedId ? 0 : overview.shiftX);
+    const y = ease(shiftY, followedId ? 0 : overview.shiftY);
+    const zoom = framingZoom === null ? camera.zoom : ease(camera.zoom, framingZoom);
+    const reframed = x !== shiftX || y !== shiftY || zoom !== camera.zoom;
+    if (reframed) {
+      shiftX = x; shiftY = y; camera.zoom = zoom;
+      project();
+    }
+    if (!followedId && !moving && !reframed) overview = null;
+    return moving || reframed;
+  }
+
   return {
+    get followedId() { return followedId; },
+    followAnimal, advanceFollow,
     setLayout(box) {
       if (box && (![box.x,box.y,box.width,box.height].every(Number.isFinite) || box.width <= 0 || box.height <= 0)) return;
       layout = box;
       project();
     },
     resize(w,h) { width = w; height = h; project(); },
-    reset() { shiftX = 0; shiftY = 0; camera.zoom = 1; project(); },
+    reset() { followedId = null; overview = null; framingZoom = null; shiftX = 0; shiftY = 0; camera.zoom = 1; project(); },
     dispose() { events.abort(); },
   };
 }

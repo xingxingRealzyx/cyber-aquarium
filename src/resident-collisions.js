@@ -378,6 +378,8 @@ function eachContact(box, animals, scene, visit) {
 }
 
 const before = new Map(), exit = new Vector3();
+// Maximum sideways recovery stroke per motion second.
+export const FISH_SCULL_SPEED = .18;
 const from = new Vector3(), to = new Vector3(), place = new Vector3();
 const heading = new Vector3(), turned = new Vector3(), trial = new Vector3();
 const creviceDirections = [[0,1,0],[0,0,1],[0,0,-1],[1,0,0],[-1,0,0],[0,-1,0]].map(v=>new Vector3(...v));
@@ -513,7 +515,7 @@ export function moveResident(animal, start, previousVelocity, animals, seconds, 
         if (reach === .3) break scan;
       }
       if (longest && scull(box.escapeDirection,box.escapeYaw,box.escapePitch,backOff)) {
-        box.escapeUntil = seconds + longest/(box.benthic ? .04 : .12);
+        box.escapeUntil = seconds + longest/(box.benthic ? .04 : FISH_SCULL_SPEED);
         return null;
       }
     }
@@ -548,6 +550,12 @@ export function moveResident(animal, start, previousVelocity, animals, seconds, 
       // Backing off is travel, so nothing at all may stand in its way.
       let most = turn, retreat, opposingFaces = false;
       const directions = [held, unit.clone().negate()];
+      if (!box.benthic) {
+        // Beside a corner the tail can brush a different face as it swings.
+        // A sideways fin stroke can open the turn without backing down the rock.
+        const flank = new Vector3(-unit.z,0,unit.x).normalize();
+        directions.push(flank, flank.clone().negate());
+      }
       if (sculling) directions.unshift(box.scullDirection);
       for (const way of directions) {
         const shift = way.clone().multiplyScalar(backOff);

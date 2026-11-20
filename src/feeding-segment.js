@@ -62,12 +62,12 @@ export function createFeedingSegments(axes, bodyShape, fit) {
     profiles.set(k,shape);
     return shape;
   }
-  function clear(x,y,z,dx,dy,dz,shape,pad,benthic,padY=pad,top=4.135) {
+  function clear(x,y,z,dx,dy,dz,shape,pad,benthic,padY=pad,top=4.135,bedGap=.007) {
     if (Math.min(x,x+dx)+shape.lo[0]-pad < -3.98 || Math.max(x,x+dx)+shape.hi[0]+pad > 3.98 ||
         Math.min(z,z+dz)+shape.lo[2]-pad < -1.98 || Math.max(z,z+dz)+shape.hi[2]+pad > 1.98) return false;
     if (!benthic && (Math.max(y,y+dy)+shape.hi[1]+padY>top ||
-        y+shape.lo[1]-padY<substrateHeight(x,z)+.007 ||
-        y+dy+shape.lo[1]-padY<substrateHeight(x+dx,z+dz)+.007)) return false;
+        y+shape.lo[1]-padY<substrateHeight(x,z)+bedGap-1e-9 ||
+        y+dy+shape.lo[1]-padY<substrateHeight(x+dx,z+dz)+bedGap-1e-9)) return false;
     for (const broad of nearby) {
       if (Math.max(x,x+dx)+shape.hi[0]+pad<=broad.lo[0] || Math.min(x,x+dx)+shape.lo[0]-pad>=broad.hi[0] ||
           Math.max(y,y+dy)+shape.hi[1]+pad<=broad.lo[1] || Math.min(y,y+dy)+shape.lo[1]-pad>=broad.hi[1] ||
@@ -78,18 +78,19 @@ export function createFeedingSegments(axes, bodyShape, fit) {
     }
     return true;
   }
-  return function canPass(a,from,to,incoming,solids,revision,descend=false) {
+  return function canPass(a,from,to,incoming,solids,revision,scull=false) {
     const benthic=SPECIES[a.species].type==='invertebrate';
     const dx=to.x-from.x, dy=to.y-from.y, dz=to.z-from.z, flat=Math.hypot(dx,dz);
     const velocity=incoming ?? a.velocity ?? {x:1,y:0,z:0};
     const yaw0=Math.atan2(velocity.z,velocity.x), pitch0=benthic?0:Math.max(-.85,Math.min(.85,Math.atan2(velocity.y,Math.hypot(velocity.x,velocity.z))));
-    if (descend) {
-      if (benthic || flat>1e-8 || dy>=0) return false;
+    if (scull) {
+      if (benthic || flat>1e-8 || !dy) return false;
       // Scull beneath the surface with the current body attitude. A grown
       // fin or a legacy pose above the waterline can only move back inside.
       const shape=profile(a,yaw0,pitch0);
       select(solids,revision,from,to,shape.radius+.015);
-      return clear(from.x,from.y,from.z,0,dy,0,shape,0,false,0,Math.max(4.135,from.y+shape.hi[1]));
+      const bedGap=dy>0 ? Math.min(.007,from.y+shape.lo[1]-substrateHeight(from.x,from.z)) : .007;
+      return clear(from.x,from.y,from.z,0,dy,0,shape,0,false,0,Math.max(4.135,from.y+shape.hi[1]),bedGap);
     }
     const yaw=flat>1e-8?Math.atan2(dz,dx):yaw0;
     const pitch=benthic?0:Math.max(-.85,Math.min(.85,Math.atan2(dy,flat)));
